@@ -38,7 +38,7 @@ class MemoryTestHarness:
                 self.messagehub.clear_partition()
             elif cmd[0] == 'run_assert':
                 if not cmd[1](self.nodes.values()):
-                    print('Assertion failed on command index{}: {}'.format(index, cmd))
+                    print('Assertion failed on command index [{}]: {}'.format(index, cmd))
                     # Print the state of the databases + command list
                     for node in self.nodes.values():
                         print(node.node_id, node.db.read_all_state())

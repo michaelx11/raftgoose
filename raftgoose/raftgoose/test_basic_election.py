@@ -8,7 +8,11 @@ class TestBasicElection():
 
         def assert_one_leader(nodes):
             leaders = [node for node in nodes if node.pub_is_leader()]
-            assert len(leaders) == 1
+            if len(leaders) != 1:
+                print("Leader results: {}".format(leaders))
+                return False
+            print('Got leader: {}'.format(leaders[0].node_id))
+            return True
 
         test_harness.run([
             ('start', node_ids),

@@ -57,6 +57,14 @@ class Database(ABC):
         state['log'] = [None] + log
         self.write_all_state(state)
 
+    def append_log(self, entry):
+        '''Append an entry to the log'''
+        state = self.read_all_state()
+        if 'log' not in state:
+            state['log'] = [None]
+        state['log'].append(entry)
+        self.write_all_state(state)
+
     def get_log(self):
         # Add a dummy entry to the log to make indexing easier
         return self.read_all_state().get('log', [None])[1:]

@@ -52,6 +52,7 @@ class RaftBase(ABC):
 
         # Lock
         self.lock = threading.Lock()
+        self.client_request_lock = threading.Lock()
 
         self.election_timeout = 0.15 # 150ms
         self.last_heartbeat = self.timer.time()
@@ -406,13 +407,47 @@ class RaftBase(ABC):
         So we need to send an append_entry RPC to all peers and see if we get a majority of replies.
         At which point we return True.
         '''
-        # Acquire the lock to get consistent state
-        # NOTE: might be possible to do this without the lock, but it's safer and costs little
-        try:
-            self.lock.acquire()
-            return self.db.get_status() == 'leader'
-        finally:
-            self.lock.release()
+        # need to acquire a global client request lock
+        with self.client_request_lock:
+            curr_log_length = 0
+            with self.lock:
+                # If status is not leader return False immediately
+                if self.db.get_status() != 'leader':
+                    return False
+                # the rest of the work is for network partitions and multiple leaders
+                # Append an empty entry to the log
+                self.db.append_log({'term': self.db.get_term(), 'command': 'check_leader'})
+                curr_log_length = self.db.get_log_length()
+    
+            # Now create a wait condition for commit of the entry, and spin a separate thread to check it every 10ms
+            # after 250ms we give up and return False
+            wait_condition = threading.Condition()
+            def _check_leader():
+                start_time = time.time()
+                while True:
+                    with wait_condition:
+                        with self.lock:
+                            if self.db.get_commit_index() >= self.db.get_log_length() - 1:
+                                wait_condition.notify()
+                                return
+                    time.sleep(0.01)
+                    if time.time() - start_time > 0.2:
+                        return
+            check_leader_thread = threading.Thread(target=_check_leader)
+            check_leader_thread.start()
+            # Now wait for the condition to be notified for 250ms
+            with wait_condition:
+                wait_condition.wait(0.25)
+                # Now we check if last entry is committed
+                with self.lock:
+                    if self.db.get_commit_index() >= self.db.get_log_length() - 1:
+                        # Remove the entry from the log
+                        self.db.set_log(self.db.get_log()[:curr_log_length - 1])
+                        return True
+                    else:
+                        # Remove the entry from the log
+                        self.db.set_log(self.db.get_log()[:curr_log_length - 1])
+                        return False
 
     def _start_election(self):
         '''Start an election process. Only side-effects are to set state and increment term
