@@ -10,9 +10,9 @@ class SendHub:
         self.lock = threading.Lock()
 
 
-    def register(self, peer):
+    def register(self, peer_id, peer):
         with self.lock:
-            self.peer_dict[peer] = peer
+            self.peer_dict[peer_id] = peer
 
 
     def send(self, sender, peer, message):
@@ -21,7 +21,7 @@ class SendHub:
                 # Drop it like it's hot
                 return
             print('Sending message from {} to {}: {}'.format(sender, peer, message))
-            self.peer_dict[peer].recv_message(sender, message)
+            self.peer_dict[peer].recv_message((sender, message))
 
 class MemoryRaft(RaftBase):
     '''Simple in-memory raft implementation for testing
@@ -40,7 +40,7 @@ class MemoryRaft(RaftBase):
         super().__init__(node_id, peers, MemoryRaft.MemoryDb(), timer=None, logger=None)
         self.db = self.MemoryDb()
         self.sendhub = sendhub
-        self.sendhub.register(node_id)
+        self.sendhub.register(node_id, self)
 
     def auth_rpc(self, peer_id, msg):
         '''No-op'''

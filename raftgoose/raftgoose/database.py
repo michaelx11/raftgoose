@@ -94,7 +94,6 @@ class Database(ABC):
         state['voted_for'] = None
         self.write_all_state(state)
 
-
     def add_vote(self, candidate_id, vote):
         '''Add a vote for a candidate'''
         state = self.read_all_state()
@@ -103,7 +102,8 @@ class Database(ABC):
         state['votes'][candidate_id] = vote
         self.write_all_state(state)
 
-
+    def get_votes(self):
+        return self.read_all_state().get('votes', {})
 
     def get_state(self):
         return self.read_all_state()

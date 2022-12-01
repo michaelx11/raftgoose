@@ -144,16 +144,22 @@ class RaftBase(ABC):
         if self.db.get_status() == 'leader' and rpc['term'] > self.db.get_term():
             _step_down()
 
+        # If term is less than current term, ignore
+
         vote_granted = True
+        if rpc['term'] < self.db.get_term():
+            vote_granted = False
         # Check if we've already voted for someone for this current term and it's not ourselves
         if self.db.get_voted_for() is not None and peer != self.node_id:
             vote_granted = False
         # Check if the candidate's log is up to date
-        if rpc['last_log_term'] < self.db.get_log()[-1]['term']:
-            vote_granted = False
-        # If it's the same term, but we have a longer log, we can't vote for them
-        if rpc['last_log_term'] == self.db.get_log()[-1]['term'] and rpc['last_log_index'] < len(self.db.get_log()) - 1:
-            vote_granted = False
+        curr_log = self.db.get_log()
+        if len(curr_log) > 0:
+            if rpc['last_log_term'] < curr_log[-1]['term']:
+                vote_granted = False
+            # If it's the same term, but we have a longer log, we can't vote for them
+            if rpc['last_log_term'] == self.db.get_log()[-1]['term'] and rpc['last_log_index'] < len(self.db.get_log()) - 1:
+                vote_granted = False
         # Send a reply, all replies contained the original rpc
         msg = {
             'type': 'request_vote_reply',
@@ -393,12 +399,13 @@ class RaftBase(ABC):
         self.db.reset_votes()
         self.db.set_voted_for(self.node_id)
         # Send request_vote to all peers
+        curr_log = self.db.get_log()
         message = {
             'type': 'request_vote',
             'term': self.db.get_term(),
             'candidate_id': self.node_id,
-            'last_log_index': len(self.db.get_log()) - 1,
-            'last_log_term': self.db.get_log()[-1]['term']
+            'last_log_index': max(0, len(curr_log) - 1),
+            'last_log_term': curr_log[len(curr_log) - 1]['term'] if len(curr_log) > 0 else 0,
         }
         for peer in self.peers:
             self.outbox.put((peer, message))
