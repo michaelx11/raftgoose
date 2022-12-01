@@ -19,6 +19,10 @@ class TestBasicElection():
             ('delay_ms', 500),
             ('stop', node_ids),
             ('run_assert', assert_one_leader),
+            ('delay_ms', 500),
+            ('run_assert', assert_one_leader),
+            ('delay_ms', 500),
+            ('stop', node_ids),
         ])
 
 if __name__ == '__main__':

@@ -23,24 +23,32 @@ class MemoryTestHarness:
         - (clear_partition, None)
         - (run_assert, func(nodes) {})
         '''
-        for index, cmd in enumerate(test_steps):
-            if cmd[0] == 'start':
-                for node_id in cmd[1]:
-                    self.nodes[node_id].start()
-            elif cmd[0] == 'stop':
-                for node_id in cmd[1]:
-                    self.nodes[node_id].stop()
-            elif cmd[0] == 'delay_ms':
-                time.sleep(cmd[1] / 1000)
-            elif cmd[0] == 'partition':
-                self.messagehub.partition(cmd[1], cmd[2])
-            elif cmd[0] == 'clear_partition':
-                self.messagehub.clear_partition()
-            elif cmd[0] == 'run_assert':
-                if not cmd[1](self.nodes.values()):
-                    print('Assertion failed on command index [{}]: {}'.format(index, cmd))
-                    # Print the state of the databases + command list
-                    for node in self.nodes.values():
-                        print(node.node_id, node.db.read_all_state())
-                    return False
-        return True
+        try:
+            for index, cmd in enumerate(test_steps):
+                if cmd[0] == 'start':
+                    for node_id in cmd[1]:
+                        self.nodes[node_id].start()
+                elif cmd[0] == 'stop':
+                    for node_id in cmd[1]:
+                        self.nodes[node_id].stop()
+                elif cmd[0] == 'delay_ms':
+                    time.sleep(cmd[1] / 1000)
+                elif cmd[0] == 'partition':
+                    self.messagehub.partition(cmd[1], cmd[2])
+                elif cmd[0] == 'clear_partition':
+                    self.messagehub.clear_partition()
+                elif cmd[0] == 'run_assert':
+                    if not cmd[1](self.nodes.values()):
+                        print('Assertion failed on command index [{}]: {}'.format(index, cmd))
+                        # Print the state of the databases + command list
+                        for node in self.nodes.values():
+                            print(node.node_id, node.db.read_all_state())
+                        return False
+    
+            # Print the state of the databases + command list
+            for node in self.nodes.values():
+                print(node.node_id, node.db.read_all_state())
+            return True
+        finally:
+            for node in self.nodes.values():
+                node.stop()
