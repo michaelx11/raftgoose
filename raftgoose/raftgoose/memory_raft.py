@@ -12,7 +12,7 @@ class MessageHub:
         self.peer_locks = {}
         self.lock = threading.Lock()
         # All nodes in 0 partition
-        self.partition = defaultdict(int)
+        self.node_partition = defaultdict(int)
 
 
     def register(self, peer_id, peer):
@@ -26,7 +26,7 @@ class MessageHub:
             if peer not in self.peer_dict:
                 # Drop it like it's hot
                 return
-            if self.partition[sender] != self.partition[peer]:
+            if self.node_partition[sender] != self.node_partition[peer]:
                 # Prevent communication between partitions
                 return
         with self.peer_locks[peer]:
@@ -36,13 +36,13 @@ class MessageHub:
     def partition(self, nodesA, nodesB):
         with self.lock:
             for node in nodesA:
-                self.partition[node] = 0
+                self.node_partition[node] = 0
             for node in nodesB:
-                self.partition[node] = 1
+                self.node_partition[node] = 1
 
     def clear_partition(self):
         with self.lock:
-            self.partition = defaultdict(int)
+            self.node_partition = defaultdict(int)
 
 
 class MemoryRaft(RaftBase):
