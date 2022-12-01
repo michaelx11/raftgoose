@@ -8,11 +8,14 @@ class MemoryTestHarness:
     '''Initializes MemoryRaft nodes and runs tests with some invariants
     '''
 
-    def __init__(self, num_nodes):
-        self.messagehub = MessageHub()
+    def __init__(self, num_nodes, quiet=False):
         self.nodes = {}
+        logging.basicConfig()
+        self.logger = logging.getLogger('MemoryTestHarness')
+        self.logger.setLevel(logging.DEBUG if not quiet else logging.WARNING)
+        self.messagehub = MessageHub(logger=self.logger)
         for i in range(num_nodes):
-            self.nodes[str(i)] = MemoryRaft(str(i), list(map(str, range(num_nodes))), self.messagehub)
+            self.nodes[str(i)] = MemoryRaft(str(i), list(map(str, range(num_nodes))), self.messagehub, timer=None, logger=self.logger)
 
     def run(self, test_steps):
         '''Handle test commands like:
@@ -39,15 +42,15 @@ class MemoryTestHarness:
                     self.messagehub.clear_partition()
                 elif cmd[0] == 'run_assert':
                     if not cmd[1](self.nodes.values()):
-                        print('Assertion failed on command index [{}]: {}'.format(index, cmd))
+                        self.logger.warning('Assertion failed on command index [{}]: {}'.format(index, cmd))
                         # Print the state of the databases + command list
                         for node in self.nodes.values():
-                            print(node.node_id, node.db.read_all_state())
+                            self.logger.warning(node.node_id, node.db.read_all_state())
                         return False
     
             # Print the state of the databases + command list
             for node in self.nodes.values():
-                print(node.node_id, node.db.read_all_state())
+                self.logger.info(node.node_id, node.db.read_all_state())
             return True
         finally:
             for node in self.nodes.values():

@@ -2,8 +2,8 @@ from memory_test_harness import MemoryTestHarness
 
 class TestElectionPartition():
 
-    def test_election_after_partition(self):
-        test_harness = MemoryTestHarness(5)
+    def test_election_after_partition(self, quiet=False):
+        test_harness = MemoryTestHarness(5, quiet)
         node_ids = list(map(str, range(5)))
 
         def assert_one_leader(nodes):
@@ -11,7 +11,6 @@ class TestElectionPartition():
             if len(leaders) != 1:
                 print("Leader results: {}".format(leaders))
                 return False
-            print('Got leader: {}'.format(leaders[0].node_id))
             return True
 
         test_harness.run([
@@ -26,4 +25,6 @@ class TestElectionPartition():
         ])
 
 if __name__ == '__main__':
-    TestElectionPartition().test_election_after_partition()
+    for i in range(100):
+        print('Test run: {}'.format(i))
+        TestElectionPartition().test_election_after_partition(quiet=True)

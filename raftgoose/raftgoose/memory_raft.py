@@ -1,3 +1,4 @@
+import logging
 import threading
 
 from collections import defaultdict
@@ -7,12 +8,16 @@ from database import Database
 
 class MessageHub:
 
-    def __init__(self):
+    def __init__(self, logger=None):
         self.peer_dict = {}
         self.peer_locks = {}
         self.lock = threading.Lock()
         # All nodes in 0 partition
         self.node_partition = defaultdict(int)
+        if logger:
+            self.logger = logger
+        else:
+            self.logger = logging.getLogger('MessageHub')
 
 
     def register(self, peer_id, peer):
@@ -30,7 +35,7 @@ class MessageHub:
                 # Prevent communication between partitions
                 return
         with self.peer_locks[peer]:
-            print('Sending message from {} to {}: {}'.format(sender, peer, message))
+            self.logger.debug('Sending message from {} to {}: {}'.format(sender, peer, message))
             self.peer_dict[peer].recv_message((sender, message))
 
     def partition(self, nodesA, nodesB):
