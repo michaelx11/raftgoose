@@ -27,9 +27,15 @@ class RaftBase(ABC):
             self.timer = time
         else:
             self.timer = timer
+        
+        if logger is None:
+            self.logger = logging.getLogger('raft {}'.format(self.node_id))
+        else:
+            self.logger = logger
 
         # Try to load existing persistent state
         if not self.db.load_persistent():
+            self.logger.info('No persistent state found, initializing new state')
             # Initialize to starting state
             self.db.set_term(0)
             self.db.set_status('follower')
@@ -53,11 +59,6 @@ class RaftBase(ABC):
         # Threadsafe message inbox
         self.inbox = queue.Queue()
         self.outbox = queue.Queue()
-        
-        if logger is None:
-            self.logger = logging.getLogger('raft {}'.format(self.node_id))
-        else:
-            self.logger = logger
 
 
     # Abstract methods that subclasses must implement
@@ -73,7 +74,7 @@ class RaftBase(ABC):
         return True
 
 
-    def _step_down(self):
+    def _step_down(self, rpc):
         '''Let go of leader position and reset state
         NOTE: must be locked
         '''
@@ -142,9 +143,9 @@ class RaftBase(ABC):
         2. If votedFor is null or candidateId, and candidate’s log is at
         least as up-to-date as receiver’s log, grant vote (§5.2, §5.4)
         '''
-        # If we're the leader and we see a higher term, we need to step down but continue to reply to message
-        if self.db.get_status() == 'leader' and rpc['term'] > self.db.get_term():
-            _step_down()
+        # Always step down to follower if we see a higher term
+        if rpc['term'] > self.db.get_term():
+            self._step_down(rpc)
 
         # If term is less than current term, ignore
 
@@ -156,11 +157,11 @@ class RaftBase(ABC):
             vote_granted = False
         # Check if the candidate's log is up to date
         curr_log = self.db.get_log()
-        if len(curr_log) > 0:
+        if self.db.get_log_length() > 0:
             if rpc['last_log_term'] < curr_log[-1]['term']:
                 vote_granted = False
             # If it's the same term, but we have a longer log, we can't vote for them
-            if rpc['last_log_term'] == self.db.get_log()[-1]['term'] and rpc['last_log_index'] < len(self.db.get_log()) - 1:
+            if rpc['last_log_term'] == curr_log[-1]['term'] and rpc['last_log_index'] < self.db.get_log_length() - 1:
                 vote_granted = False
         # Send a reply, all replies contained the original rpc
         msg = {
@@ -183,9 +184,9 @@ class RaftBase(ABC):
 
     def _process_request_vote_reply(self, peer, rpc):
         '''Process a request_vote_reply RPC'''
-        # If we're the leader and we see a higher term, we need to step down but continue rest of processing
-        if self.db.get_status() == 'leader' and rpc['term'] > self.db.get_term():
-            _step_down()
+        # Always step down to follower if we see a higher term
+        if rpc['term'] > self.db.get_term():
+            self._step_down(rpc)
 
         # Check if we're still a candidate
         if self.db.get_status() != 'candidate':
@@ -212,6 +213,11 @@ class RaftBase(ABC):
             self.election_timeout = random.uniform(0.15, 0.3)
             # Reset the votes
             self.db.reset_votes()
+            # Reset the next index for each peer and match index
+            log_len = self.db.get_log_length()
+            self.db.set_next_indexes_bulk({peer: log_len for peer in self.peers})
+            self.db.set_match_indexes_bulk({peer: 0 for peer in self.peers})
+
             # Send an empty append_entry to all peers
             msg = {
                 'type': 'append_entry',
@@ -240,9 +246,15 @@ class RaftBase(ABC):
         4. Append any new entries not already in the log
         5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
         '''
-        # If we're the leader and we see a higher term, we need to step down but continue to reply to message
-        if self.db.get_status() == 'leader' and rpc['term'] > self.db.get_term():
-            _step_down()
+        # If it's from myself, ignore
+        if rpc['leader_id'] == self.node_id:
+            return
+        # Always step down to follower if we see a higher term
+        if rpc['term'] > self.db.get_term():
+            self._step_down(rpc)
+        # Or if we're a candidate and we see an append_entry from a leader with the right term
+        if self.db.get_status() == 'candidate' and rpc['term'] == self.db.get_term():
+            self._step_down(rpc)
         success = True
 
         curr_log = self.db.get_log()
@@ -253,12 +265,13 @@ class RaftBase(ABC):
             success = False
 
         # If curr_log is empty we take anything (scientific terms)
-        if len(curr_log) > 0:
+        log_len = self.db.get_log_length()
+        if log_len > 0:
             # 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
-            if rpc['prev_log_index'] > len(curr_log) - 1:
+            if rpc['prev_log_index'] > log_len - 1:
                 success = False
             # 3. If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it
-            if rpc['prev_log_index'] <= len(curr_log) - 1 and curr_log[rpc['prev_log_index']]['term'] != rpc['prev_log_term']:
+            if rpc['prev_log_index'] <= log_len - 1 and curr_log[rpc['prev_log_index']]['term'] != rpc['prev_log_term']:
                 success = False
                 # Need to delete all entries after prev_log_index
                 self.db.set_log(curr_log[:rpc['prev_log_index']])
@@ -267,11 +280,14 @@ class RaftBase(ABC):
         # 4. Append any new entries not already in the log
         if success:
             for entry in rpc['entries']:
-                if entry['index'] > len(curr_log) - 1:
+                if entry['index'] > log_len - 1:
                     self.db.append_log(entry)
+            # Reset the election timeout
+            self.last_heartbeat = self.timer.time()
+            self.election_timeout = random.uniform(0.15, 0.3)
         # 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
         if rpc['leader_commit'] > self.db.get_commit_index():
-            self.db.set_commit_index(min(rpc['leader_commit'], len(self.db.get_log()) - 1))
+            self.db.set_commit_index(min(rpc['leader_commit'], self.db.get_log_length() - 1))
 
         # Send a reply
         msg = {
@@ -299,9 +315,8 @@ class RaftBase(ABC):
         if len(match_index) > 0:
             # Compute majority
             majority = match_index[len(match_index) // 2]
-            self.logger.debug('Majority match index is {}'.format(majority))
-            # Check if log entry at majority index has same term as current term
-            if self.db.get_log()[majority]['term'] == self.db.get_term():
+            if majority > self.db.get_commit_index() and self.db.get_log()[majority]['term'] == self.db.get_term():
+                self.logger.debug('Majority match index is {}'.format(majority))
                 # Set commit index to majority
                 self.db.set_commit_index(majority)
 
@@ -313,9 +328,9 @@ class RaftBase(ABC):
         - If successful: update nextIndex and matchIndex for follower (§5.3)
         - If AppendEntries fails because of log inconsistency: decrement nextIndex and retry (§5.3)
         '''
-        # If we're the leader and we see a higher term, we need to step down but continue rest of processing
-        if self.db.get_status() == 'leader' and rpc['term'] > self.db.get_term():
-            _step_down()
+        # Always step down to follower if we see a higher term
+        if rpc['term'] > self.db.get_term():
+            self._step_down(rpc)
 
         # Check if we're still a leader
         if self.db.get_status() != 'leader':
@@ -344,7 +359,7 @@ class RaftBase(ABC):
                 'term': self.db.get_term(),
                 'leader_id': self.node_id,
                 'prev_log_index': self.db.get_next_index(peer) - 1,
-                'prev_log_term': curr_log[self.db.get_next_index(peer) - 1]['term'] if len(curr_log) > 0 else 0,
+                'prev_log_term': curr_log[self.db.get_next_index(peer) - 1]['term'] if self.db.get_log_length() > 0 else 0,
                 'entries': curr_log[self.db.get_next_index(peer):],
                 'leader_commit': self.db.get_commit_index(),
             }
@@ -405,6 +420,7 @@ class RaftBase(ABC):
         '''
         # Increment term
         self.db.set_term(self.db.get_term() + 1)
+        self.logger.debug('Starting election with term {}'.format(self.db.get_term()))
         # Set state to candidate
         self.db.set_status('candidate')
         # Reset last_heartbeat and election timeout
@@ -420,7 +436,7 @@ class RaftBase(ABC):
             'term': self.db.get_term(),
             'candidate_id': self.node_id,
             'last_log_index': max(0, len(curr_log) - 1),
-            'last_log_term': curr_log[len(curr_log) - 1]['term'] if len(curr_log) > 0 else 0,
+            'last_log_term': curr_log[len(curr_log) - 1]['term'] if self.db.get_log_length() > 0 else 0,
         }
         for peer in self.peers:
             self.outbox.put((peer, message))

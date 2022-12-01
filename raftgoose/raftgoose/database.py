@@ -53,11 +53,16 @@ class Database(ABC):
     def set_log(self, log):
         '''Set the entire log at once'''
         state = self.read_all_state()
-        state['log'] = log
+        # Dummy entry to make indexing easier
+        state['log'] = [None] + log
         self.write_all_state(state)
 
     def get_log(self):
-        return self.read_all_state().get('log', [])
+        # Add a dummy entry to the log to make indexing easier
+        return self.read_all_state().get('log', [None])[1:]
+
+    def get_log_length(self):
+        return len(self.get_log()) - 1
 
     def set_commit_index(self, commit_index):
         '''Volatile according to the paper, but gonna persist anyways I think'''
