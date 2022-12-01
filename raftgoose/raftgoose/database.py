@@ -54,20 +54,20 @@ class Database(ABC):
         '''Set the entire log at once'''
         state = self.read_all_state()
         # Dummy entry to make indexing easier
-        state['log'] = [None] + log
+        state['log'] = [{'term': 0, 'index': 0}] + log
         self.write_all_state(state)
 
     def append_log(self, entry):
         '''Append an entry to the log'''
         state = self.read_all_state()
         if 'log' not in state:
-            state['log'] = [None]
+            state['log'] = [{'term': 0, 'index': 0}]
         state['log'].append(entry)
         self.write_all_state(state)
 
     def get_log(self):
         # Add a dummy entry to the log to make indexing easier
-        return self.read_all_state().get('log', [None])[1:]
+        return self.read_all_state().get('log', [{'term': 0, 'index': 0}])
 
     def get_log_length(self):
         return len(self.get_log()) - 1

@@ -16,12 +16,11 @@ class TestBasicElection():
 
         test_harness.run([
             ('start', node_ids),
-            ('delay_ms', 500),
-            ('stop', node_ids),
+            ('delay_ms', 250),
             ('run_assert', assert_one_leader),
-            ('delay_ms', 500),
+            ('delay_ms', 250),
             ('run_assert', assert_one_leader),
-            ('delay_ms', 500),
+            ('delay_ms', 250),
             ('stop', node_ids),
         ])
 

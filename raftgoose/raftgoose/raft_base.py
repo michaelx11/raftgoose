@@ -355,12 +355,13 @@ class RaftBase(ABC):
             self.db.set_next_index(peer, self.db.get_next_index(peer) - 1)
             # Send an append_entry to the peer
             curr_log = self.db.get_log()
+            prev_log_index = max(0, self.db.get_next_index(peer) - 1)
             msg = {
                 'type': 'append_entry',
                 'term': self.db.get_term(),
                 'leader_id': self.node_id,
-                'prev_log_index': self.db.get_next_index(peer) - 1,
-                'prev_log_term': curr_log[self.db.get_next_index(peer) - 1]['term'] if self.db.get_log_length() > 0 else 0,
+                'prev_log_index': prev_log_index,
+                'prev_log_term': curr_log[prev_log_index]['term'],
                 'entries': curr_log[self.db.get_next_index(peer):],
                 'leader_commit': self.db.get_commit_index(),
             }
@@ -416,7 +417,7 @@ class RaftBase(ABC):
                     return False
                 # the rest of the work is for network partitions and multiple leaders
                 # Append an empty entry to the log
-                self.db.append_log({'term': self.db.get_term(), 'command': 'check_leader'})
+                self.db.append_log({'term': self.db.get_term(), 'index': self.db.get_log_length() + 1, 'command': 'check_leader'})
                 curr_log_length = self.db.get_log_length()
     
             # Now create a wait condition for commit of the entry, and spin a separate thread to check it every 10ms
@@ -500,7 +501,7 @@ class RaftBase(ABC):
             # Check if commit index > last_applied
             if self.db.get_commit_index() > self.db.get_last_applied():
                 # Increment last_applied
-                self.db.increment_last_applied()
+                self.db.set_last_applied(self.db.get_last_applied() + 1)
                 # TODO: here we would apply the log entry to the state machine
                 # but in practice the only thing that would change would be the peer list
                 # TODO: update peer list with add/remove operation
@@ -530,7 +531,7 @@ class RaftBase(ABC):
                     # Check all next_index values against last log index
                     for peer, next_index in self.db.get_next_indexes_bulk().items():
                         curr_log = self.db.get_log()
-                        if next_index <= len(curr_log) - 1:
+                        if next_index <= self.db.get_log_length():
                             # Send append_entry RPC
                             message = {
                                 'type': 'append_entry',
