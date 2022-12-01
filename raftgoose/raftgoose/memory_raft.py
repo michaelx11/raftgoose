@@ -1,5 +1,7 @@
 import threading
 
+from collections import defaultdict
+
 from raft_base import RaftBase
 from database import Database
 
@@ -9,6 +11,8 @@ class MessageHub:
         self.peer_dict = {}
         self.peer_locks = {}
         self.lock = threading.Lock()
+        # All nodes in 0 partition
+        self.partition = defaultdict(int)
 
 
     def register(self, peer_id, peer):
@@ -18,12 +22,28 @@ class MessageHub:
 
 
     def send(self, sender, peer, message):
-        if peer not in self.peer_dict:
-            # Drop it like it's hot
-            return
+        with self.lock:
+            if peer not in self.peer_dict:
+                # Drop it like it's hot
+                return
+            if self.partition[sender] != self.partition[peer]:
+                # Prevent communication between partitions
+                return
         with self.peer_locks[peer]:
             print('Sending message from {} to {}: {}'.format(sender, peer, message))
             self.peer_dict[peer].recv_message((sender, message))
+
+    def partition(self, nodesA, nodesB):
+        with self.lock:
+            for node in nodesA:
+                self.partition[node] = 0
+            for node in nodesB:
+                self.partition[node] = 1
+
+    def clear_partition(self):
+        with self.lock:
+            self.partition = defaultdict(int)
+
 
 class MemoryRaft(RaftBase):
     '''Simple in-memory raft implementation for testing
