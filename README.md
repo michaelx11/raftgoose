@@ -1,6 +1,12 @@
 # Duck Duck Goose Implementation
 
 
+## Solution
+
+Chosen: Use Raft, isLeader = (True if node thinks it is leader and can execute a committed request, otherwise False)
+
+Possible: Design a subset of Raft, but I think the probability of making some concurrency mistake in a custom protocol is too high.
+
 
 ## References
 

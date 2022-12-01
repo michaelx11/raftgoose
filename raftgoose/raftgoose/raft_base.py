@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 class RaftBase(ABC):
     '''A basic Raft implementation which accesses everything through expected methods for abstraction'''
 
-    def __init__(self, node_id, peers, db, timer, logger=None):
+    def __init__(self, node_id, peers, db, timer=None, logger=None):
         '''Initialize the RaftBase object
         
         Inject the timer to allow for easier testing
@@ -20,11 +20,17 @@ class RaftBase(ABC):
         self.peers = peers
         self.db = db
 
+        if timer is None:
+            # Wild but use the module LOL
+            self.timer = time
+        else:
+            self.timer = timer
+
         # Try to load existing persistent state
         if not self.db.load_persistent():
             # Initialize to starting state
             self.db.set_term(0)
-            self.db.set_state('follower')
+            self.db.set_status('follower')
             self.db.set_voted_for(None)
             self.db.set_log([])
             self.db.set_commit_index(0)
@@ -34,13 +40,13 @@ class RaftBase(ABC):
             self.db.reset_votes()
 
         # On initialization we always start as a follower
-        self.db.set_state('follower')
+        self.db.set_status('follower')
 
         # Lock
         self.lock = threading.Lock()
 
         self.election_timeout = 0.15 # 150ms
-        self.last_heartbeat = timer.time()
+        self.last_heartbeat = self.timer.time()
 
         # Threadsafe message inbox
         self.inbox = queue.Queue()
@@ -60,7 +66,7 @@ class RaftBase(ABC):
 
 
     @abstractmethod
-    def auth_rpc(self, rpc):
+    def auth_rpc(self, peer, rpc):
         '''Entirely optional method to authenticate RPCs, could imagine using a signature or something'''
         return True
 
@@ -71,27 +77,27 @@ class RaftBase(ABC):
         '''
         self.logger.debug('Stepping down')
         self.db.set_term(rpc['term'])
-        self.db.set_state('follower')
+        self.db.set_status('follower')
         self.db.set_voted_for(None)
         # NOTE: don't think we need to respond to this
         return
 
 
-    def _process_rpc(self, rpc):
+    def _process_rpc(self, peer, rpc):
         '''RPC is a pure Python object (up to subclass to deserialize)
 
         RPC types are:
             - request_vote
             - request_vote_reply
-            - append_entry (singular, to keep things simple)
+            - append_entry
             - append_entry_reply
             - add_peer (more experimental)
             - remove_peer
         '''
-        if not self.auth_rpc(rpc):
+        if not self.auth_rpc(peer, rpc):
             # TODO: log auth failure
             return
-        if self.db.get_state() == 'stopped':
+        if self.db.get_status() == 'stopped':
             return
 
         # Check if term is up to date
@@ -102,17 +108,19 @@ class RaftBase(ABC):
         rpc_type = rpc['type']
         # Switch/case through all RPC types
         if rpc_type == 'request_vote':
-            self._process_request_vote(rpc)
+            self._process_request_vote(peer, rpc)
         elif rpc_type == 'request_vote_reply':
-            self._process_request_vote_reply(rpc)
+            self._process_request_vote_reply(peer, rpc)
         elif rpc_type == 'append_entry':
-            self._process_append_entry(rpc)
+            self._process_append_entry(peer, rpc)
         elif rpc_type == 'append_entry_reply':
-            self._process_append_entry_reply(rpc)
+            self._process_append_entry_reply(peer, rpc)
         elif rpc_type == 'add_peer':
             # TODO
+            pass
         elif rpc_type == 'remove_peer':
             # TODO
+            pass
         else:
             raise Exception('Unknown RPC type')
 
@@ -122,16 +130,23 @@ class RaftBase(ABC):
         self.inbox.put(message)
 
 
-    def _process_request_vote(self, rpc):
+    def _process_request_vote(self, peer, rpc):
         '''Process a request_vote RPC and schedule a reply (if necessary) in outbox
+
+        from raft paper:
+
+        Receiver implementation:
+        1. Reply false if term < currentTerm (§5.1)
+        2. If votedFor is null or candidateId, and candidate’s log is at
+        least as up-to-date as receiver’s log, grant vote (§5.2, §5.4)
         '''
         # If we're the leader and we see a higher term, we need to step down but continue to reply to message
-        if self.db.get_state() == 'leader' and rpc['term'] > self.db.get_term():
+        if self.db.get_status() == 'leader' and rpc['term'] > self.db.get_term():
             _step_down()
 
         vote_granted = True
-        # Check if we've already voted for someone for this current term
-        if self.db.get_voted_for() is not None:
+        # Check if we've already voted for someone for this current term and it's not ourselves
+        if self.db.get_voted_for() is not None and peer != self.node_id:
             vote_granted = False
         # Check if the candidate's log is up to date
         if rpc['last_log_term'] < self.db.get_log()[-1]['term']:
@@ -139,27 +154,29 @@ class RaftBase(ABC):
         # If it's the same term, but we have a longer log, we can't vote for them
         if rpc['last_log_term'] == self.db.get_log()[-1]['term'] and rpc['last_log_index'] < len(self.db.get_log()) - 1:
             vote_granted = False
-        # Send a reply
+        # Send a reply, all replies contained the original rpc
         msg = {
             'type': 'request_vote_reply',
             'term': self.db.get_term(),
             'vote_granted': vote_granted,
+            'node_id': self.node_id,
+            'original_rpc': rpc
         }
         if vote_granted:
             # Vote for the candidate
             self.db.set_voted_for(rpc['candidate_id'])
         # Once it goes into the outbox it's as good as done from this node's perspective
-        self.outbox.put(msg)
+        self.outbox.put((peer, msg))
 
 
-    def _process_request_vote_reply(self, rpc):
+    def _process_request_vote_reply(self, peer, rpc):
         '''Process a request_vote_reply RPC'''
         # If we're the leader and we see a higher term, we need to step down but continue rest of processing
-        if self.db.get_state() == 'leader' and rpc['term'] > self.db.get_term():
+        if self.db.get_status() == 'leader' and rpc['term'] > self.db.get_term():
             _step_down()
 
         # Check if we're still a candidate
-        if self.db.get_state() != 'candidate':
+        if self.db.get_status() != 'candidate':
             self.logger.debug('Received a request_vote_reply but we are not a candidate')
             return
 
@@ -177,7 +194,7 @@ class RaftBase(ABC):
         if self.db.get_votes() > len(self.peers) / 2:
             # We've won the election!
             self.logger.debug('We won the election!')
-            self.db.set_state('leader')
+            self.db.set_status('leader')
             # Reset the heartbeat timer
             self.last_heartbeat = self.timer.time()
             self.election_timeout = random.uniform(0.15, 0.3)
@@ -193,42 +210,154 @@ class RaftBase(ABC):
                 'entries': [],
                 'leader_commit': self.db.get_commit_index(),
             }
-            self.outbox.put(msg)
+            for t_peer in self.peers:
+                self.outbox.put((t_peer, msg))
 
 
-    def _process_append_entry(self, rpc):
+    def _process_append_entry(self, peer, rpc):
         '''Process an append_entry RPC and schedule a reply (if necessary) in outbox
+
+        Taken from Raft paper:
+
+        Receiver implementation:
+        1. Reply false if term < currentTerm (§5.1)
+        2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
+        3. If an existing entry conflicts with a new one (same index
+        but different terms), delete the existing entry and all that
+        follow it (§5.3)
+        4. Append any new entries not already in the log
+        5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
         '''
         # If we're the leader and we see a higher term, we need to step down but continue to reply to message
-        if self.db.get_state() == 'leader' and rpc['term'] > self.db.get_term():
+        if self.db.get_status() == 'leader' and rpc['term'] > self.db.get_term():
             _step_down()
+        success = True
 
-        # Check if the RPC is for the current term
-        if rpc['term'] != self.db.get_term():
-            return
-        # Check if the log is up to date
-        if rpc['prev_log_index'] > len(self.db.get_log()) - 1:
-            pass
+        curr_log = self.db.get_log()
+        curr_term = self.db.get_term()
 
-    def _process_append_entry_reply(self, rpc):
+        # 1. Reply false if term < currentTerm
+        if rpc['term'] < curr_term:
+            success = False
+        # 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
+        if rpc['prev_log_index'] > len(curr_log) - 1:
+            success = False
+        # 3. If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it
+        if rpc['prev_log_index'] <= len(curr_log) - 1 and curr_log[rpc['prev_log_index']]['term'] != rpc['prev_log_term']:
+            success = False
+            # Need to delete all entries after prev_log_index
+            self.db.set_log(curr_log[:rpc['prev_log_index']])
+            curr_log = self.db.get_log()
+        # 4. Append any new entries not already in the log
+        if success:
+            for entry in rpc['entries']:
+                if entry['index'] > len(curr_log) - 1:
+                    self.db.append_log(entry)
+        # 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
+        if rpc['leader_commit'] > self.db.get_commit_index():
+            self.db.set_commit_index(min(rpc['leader_commit'], len(self.db.get_log()) - 1))
+
+        # Send a reply
+        msg = {
+            'type': 'append_entry_reply',
+            'term': curr_term,
+            'success': success,
+            'node_id': self.node_id,
+            'original_rpc': rpc
+        }
+        self.outbox.put((peer, msg))
+
+
+    def _check_commit(self):
+        '''Check if we can commit any entries
+
+        Taken from Raft paper:
+
+        • If there exists an N such that N > commitIndex, a majority
+        of matchIndex[i] ≥ N, and log[N].term == currentTerm:
+        set commitIndex = N (§5.3, §5.4).
+        '''
+        # Check if we can commit by computing max match index with majority
+        match_index = self.db.get_match_index()
+        match_index = sorted(match_index.values())
+        if len(match_index) > 0:
+            # Compute majority
+            majority = match_index[len(match_index) // 2]
+            # Check if log entry at majority index has same term as current term
+            if self.db.get_log()[majority]['term'] == self.db.get_term():
+                # Set commit index to majority
+                self.db.set_commit_index(majority)
+
+    def _process_append_entry_reply(self, peer, rpc):
         '''Process an append entry reply 
+
+        Taken from Raft paper:
+
+        - If successful: update nextIndex and matchIndex for follower (§5.3)
+        - If AppendEntries fails because of log inconsistency: decrement nextIndex and retry (§5.3)
         '''
         # If we're the leader and we see a higher term, we need to step down but continue rest of processing
-        if self.db.get_state() == 'leader' and rpc['term'] > self.db.get_term():
+        if self.db.get_status() == 'leader' and rpc['term'] > self.db.get_term():
             _step_down()
 
+        # Check if we're still a leader
+        if self.db.get_status() != 'leader':
+            self.logger.debug('Received an append_entry_reply but we are not a leader')
+            return
+
+        # Check if the reply is for the current term
+        if rpc['term'] != self.db.get_term():
+            self.logger.debug('Ignoring append_entry_reply for old term')
+            return
+
+        # Check if the reply was successful
+        if rpc['success']:
+            # Update nextIndex and matchIndex for follower
+            self.db.set_next_index(peer, rpc['original_rpc']['prev_log_index'] + len(rpc['original_rpc']['entries']) + 1)
+            self.db.set_match_index(peer, rpc['original_rpc']['prev_log_index'] + len(rpc['original_rpc']['entries']))
+            # Check if we can commit any new entries
+            self._check_commit()
+        else:
+            # Decrement nextIndex and retry
+            self.db.set_next_index(peer, self.db.get_next_index(peer) - 1)
+            # Send an append_entry to the peer
+            msg = {
+                'type': 'append_entry',
+                'term': self.db.get_term(),
+                'leader_id': self.node_id,
+                'prev_log_index': self.db.get_next_index(peer) - 1,
+                'prev_log_term': self.db.get_log()[self.db.get_next_index(peer) - 1]['term'],
+                'entries': self.db.get_log()[self.db.get_next_index(peer):],
+                'leader_commit': self.db.get_commit_index(),
+            }
+            self.outbox.put((peer, msg))
 
 
-    def start_internal_loop(self):
+    def start(self):
         '''Start the internal loop'''
         self.internal_loop_thread = threading.Thread(target=self._internal_loop)
         self.internal_loop_thread.start()
 
 
-    def kill(self):
+    def _send_heartbeats(self):
+        '''Send empty append_entry RPCs to all peers'''
+        msg = {
+            'type': 'append_entry',
+            'term': self.db.get_term(),
+            'leader_id': self.node_id,
+            'prev_log_index': 0,
+            'prev_log_term': 0,
+            'entries': [],
+            'leader_commit': self.db.get_commit_index(),
+        }
+        for t_peer in self.peers:
+            self.outbox.put((t_peer, msg))
+
+
+    def stop(self):
         '''Kill the internal loop'''
         self.internal_loop_thread.join()
-        self.db.set_state('stopped')
+        self.db.set_status('stopped')
 
 
     def pub_is_leader(self):
@@ -245,7 +374,7 @@ class RaftBase(ABC):
         # NOTE: might be possible to do this without the lock, but it's safer and costs little
         try:
             self.lock.acquire()
-            return self.db.get_state() == 'leader'
+            return self.db.get_status() == 'leader'
         finally:
             self.lock.release()
 
@@ -254,15 +383,14 @@ class RaftBase(ABC):
         and schedule messages in outbox
         '''
         # Increment term
-        self.db.increment_term()
+        self.db.set_term(self.db.get_term() + 1)
         # Set state to candidate
-        self.db.set_state('candidate')
+        self.db.set_status('candidate')
         # Reset last_heartbeat and election timeout
         self.last_heartbeat = self.timer.time()
         self.election_timeout = random.uniform(0.15, 0.3)
         # Vote for self
         self.db.reset_votes()
-        self.db.add_vote(rpc['node_id'], rpc['vote_granted'])
         self.db.set_voted_for(self.node_id)
         # Send request_vote to all peers
         message = {
@@ -286,20 +414,28 @@ class RaftBase(ABC):
         '''
         # Select from the inbox or a timeout
         while True:
+            # Check if commit index > last_applied
+            if self.db.get_commit_index() > self.db.get_last_applied():
+                # Increment last_applied
+                self.db.increment_last_applied()
+                # TODO: here we would apply the log entry to the state machine
+                # but in practice the only thing that would change would be the peer list
+                # TODO: update peer list with add/remove operation
+
             # Pull all messages from inbox non-blocking until empty (non-blocking)
             limit = 100
             while not self.inbox.empty() and limit > 0:
                 try:
-                    rpc = self.inbox.get_nowait()
+                    peer, rpc = self.inbox.get_nowait()
                     # Only need to lock processing cause queue is thread-safe
                     with self.lock:
-                        self._process_rpc(rpc)
+                        self._process_rpc(peer, rpc)
                     limit -= 1
                 except queue.Empty:
                     break
 
             # Check for election timeout or need to heartbeat
-            is_leader = self.db.get_state() == 'leader'
+            is_leader = self.db.get_status() == 'leader'
             election_elapsed = self.timer.time() - self.last_heartbeat > self.election_timeout
             if not is_leader and election_elapsed:
                 with self.lock:
@@ -310,6 +446,25 @@ class RaftBase(ABC):
                 # Send heartbeat
                 with self.lock:
                     self._send_heartbeats()
+                    # Tricky bit, need to do some bookkeeping logic from paper
+                    # ========================================================
+                    # If last log index ≥ nextIndex for a follower: send AppendEntries RPC with log entries starting at nextIndex
+                    # ========================================================
+
+                    # Check all next_index values against last log index
+                    for peer, next_index in self.db.get_next_index().items():
+                        if next_index <= len(self.db.get_log()) - 1:
+                            # Send append_entry RPC
+                            message = {
+                                'type': 'append_entry',
+                                'term': self.db.get_term(),
+                                'leader_id': self.node_id,
+                                'prev_log_index': next_index - 1,
+                                'prev_log_term': self.db.get_log()[next_index - 1]['term'],
+                                'entries': self.db.get_log()[next_index:],
+                                'leader_commit': self.db.get_commit_index(),
+                            }
+                            self.outbox.put((peer, message))
 
             # Send all messages in outbox, no need to lock here
             while not self.outbox.empty():
