@@ -20,6 +20,8 @@ class RaftBase(ABC):
         self.peers = peers
         self.db = db
 
+        self.running = True
+
         if timer is None:
             # Wild but use the module LOL
             self.timer = time
@@ -35,8 +37,8 @@ class RaftBase(ABC):
             self.db.set_log([])
             self.db.set_commit_index(0)
             self.db.set_last_applied(0)
-            self.db.set_next_index({peer: 0 for peer in self.peers})
-            self.db.set_match_index({peer: 0 for peer in self.peers})
+            self.db.set_next_indexes_bulk({peer: 0 for peer in self.peers})
+            self.db.set_match_indexes_bulk({peer: 0 for peer in self.peers})
             self.db.reset_votes()
 
         # On initialization we always start as a follower
@@ -150,7 +152,7 @@ class RaftBase(ABC):
         if rpc['term'] < self.db.get_term():
             vote_granted = False
         # Check if we've already voted for someone for this current term and it's not ourselves
-        if self.db.get_voted_for() is not None and peer != self.node_id:
+        if self.db.get_voted_for() is not None and self.db.get_voted_for() != self.node_id:
             vote_granted = False
         # Check if the candidate's log is up to date
         curr_log = self.db.get_log()
@@ -171,6 +173,10 @@ class RaftBase(ABC):
         if vote_granted:
             # Vote for the candidate
             self.db.set_voted_for(rpc['candidate_id'])
+            # Reset election timeout
+            self.last_heartbeat = self.timer.time()
+            self.election_timeout = random.uniform(0.15, 0.3)
+
         # Once it goes into the outbox it's as good as done from this node's perspective
         self.outbox.put((peer, msg))
 
@@ -197,7 +203,7 @@ class RaftBase(ABC):
             rpc['node_id'], rpc['vote_granted']))
 
         # Check if we've won the election
-        if self.db.get_votes() > len(self.peers) / 2:
+        if sum(self.db.get_votes().values()) > len(self.peers) / 2:
             # We've won the election!
             self.logger.debug('We won the election!')
             self.db.set_status('leader')
@@ -245,15 +251,19 @@ class RaftBase(ABC):
         # 1. Reply false if term < currentTerm
         if rpc['term'] < curr_term:
             success = False
-        # 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
-        if rpc['prev_log_index'] > len(curr_log) - 1:
-            success = False
-        # 3. If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it
-        if rpc['prev_log_index'] <= len(curr_log) - 1 and curr_log[rpc['prev_log_index']]['term'] != rpc['prev_log_term']:
-            success = False
-            # Need to delete all entries after prev_log_index
-            self.db.set_log(curr_log[:rpc['prev_log_index']])
-            curr_log = self.db.get_log()
+
+        # If curr_log is empty we take anything (scientific terms)
+        if len(curr_log) > 0:
+            # 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
+            if rpc['prev_log_index'] > len(curr_log) - 1:
+                success = False
+            # 3. If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it
+            if rpc['prev_log_index'] <= len(curr_log) - 1 and curr_log[rpc['prev_log_index']]['term'] != rpc['prev_log_term']:
+                success = False
+                # Need to delete all entries after prev_log_index
+                self.db.set_log(curr_log[:rpc['prev_log_index']])
+                curr_log = self.db.get_log()
+
         # 4. Append any new entries not already in the log
         if success:
             for entry in rpc['entries']:
@@ -284,11 +294,12 @@ class RaftBase(ABC):
         set commitIndex = N (§5.3, §5.4).
         '''
         # Check if we can commit by computing max match index with majority
-        match_index = self.db.get_match_index()
+        match_index = self.db.get_match_indexes_bulk()
         match_index = sorted(match_index.values())
         if len(match_index) > 0:
             # Compute majority
             majority = match_index[len(match_index) // 2]
+            self.logger.debug('Majority match index is {}'.format(majority))
             # Check if log entry at majority index has same term as current term
             if self.db.get_log()[majority]['term'] == self.db.get_term():
                 # Set commit index to majority
@@ -327,13 +338,14 @@ class RaftBase(ABC):
             # Decrement nextIndex and retry
             self.db.set_next_index(peer, self.db.get_next_index(peer) - 1)
             # Send an append_entry to the peer
+            curr_log = self.db.get_log()
             msg = {
                 'type': 'append_entry',
                 'term': self.db.get_term(),
                 'leader_id': self.node_id,
                 'prev_log_index': self.db.get_next_index(peer) - 1,
-                'prev_log_term': self.db.get_log()[self.db.get_next_index(peer) - 1]['term'],
-                'entries': self.db.get_log()[self.db.get_next_index(peer):],
+                'prev_log_term': curr_log[self.db.get_next_index(peer) - 1]['term'] if len(curr_log) > 0 else 0,
+                'entries': curr_log[self.db.get_next_index(peer):],
                 'leader_commit': self.db.get_commit_index(),
             }
             self.outbox.put((peer, msg))
@@ -341,6 +353,8 @@ class RaftBase(ABC):
 
     def start(self):
         '''Start the internal loop'''
+        with self.lock:
+            self.running = True
         self.internal_loop_thread = threading.Thread(target=self._internal_loop)
         self.internal_loop_thread.start()
 
@@ -362,8 +376,9 @@ class RaftBase(ABC):
 
     def stop(self):
         '''Kill the internal loop'''
+        with self.lock:
+            self.running = False
         self.internal_loop_thread.join()
-        self.db.set_status('stopped')
 
 
     def pub_is_leader(self):
@@ -421,6 +436,16 @@ class RaftBase(ABC):
         '''
         # Select from the inbox or a timeout
         while True:
+            if not self.running:
+                return
+
+            # Check for election timeout or need to heartbeat
+            is_leader = self.db.get_status() == 'leader'
+            election_elapsed = self.timer.time() - self.last_heartbeat > self.election_timeout
+            if not is_leader and election_elapsed:
+                with self.lock:
+                    self._start_election()
+
             # Check if commit index > last_applied
             if self.db.get_commit_index() > self.db.get_last_applied():
                 # Increment last_applied
@@ -430,7 +455,7 @@ class RaftBase(ABC):
                 # TODO: update peer list with add/remove operation
 
             # Pull all messages from inbox non-blocking until empty (non-blocking)
-            limit = 100
+            limit = 10
             while not self.inbox.empty() and limit > 0:
                 try:
                     peer, rpc = self.inbox.get_nowait()
@@ -440,13 +465,6 @@ class RaftBase(ABC):
                     limit -= 1
                 except queue.Empty:
                     break
-
-            # Check for election timeout or need to heartbeat
-            is_leader = self.db.get_status() == 'leader'
-            election_elapsed = self.timer.time() - self.last_heartbeat > self.election_timeout
-            if not is_leader and election_elapsed:
-                with self.lock:
-                    self._start_election()
 
             # If you're the leader, send some heartbeat messages ONLY IF LEADER
             if is_leader:
@@ -459,16 +477,17 @@ class RaftBase(ABC):
                     # ========================================================
 
                     # Check all next_index values against last log index
-                    for peer, next_index in self.db.get_next_index().items():
-                        if next_index <= len(self.db.get_log()) - 1:
+                    for peer, next_index in self.db.get_next_indexes_bulk().items():
+                        curr_log = self.db.get_log()
+                        if next_index <= len(curr_log) - 1:
                             # Send append_entry RPC
                             message = {
                                 'type': 'append_entry',
                                 'term': self.db.get_term(),
                                 'leader_id': self.node_id,
                                 'prev_log_index': next_index - 1,
-                                'prev_log_term': self.db.get_log()[next_index - 1]['term'],
-                                'entries': self.db.get_log()[next_index:],
+                                'prev_log_term': curr_log[next_index - 1]['term'] if next_index > 0 else 0,
+                                'entries': curr_log[next_index:],
                                 'leader_commit': self.db.get_commit_index(),
                             }
                             self.outbox.put((peer, message))
@@ -481,6 +500,6 @@ class RaftBase(ABC):
                 self.send_message(peer, message)
 
             # Finally sleep until either next election timeout or next heartbeat if leader
-            next_heartbeat_delay = 0.05
+            next_heartbeat_delay = 0.03
             sleep_time = min(self.election_timeout, next_heartbeat_delay)
             time.sleep(sleep_time)

@@ -77,15 +77,41 @@ class Database(ABC):
     def get_last_applied(self):
         return self.read_all_state().get('last_applied', 0)
 
-    def set_next_index(self, next_index):
+    def set_next_indexes_bulk(self, next_index):
         state = self.read_all_state()
         state['next_index'] = next_index
         self.write_all_state(state)
 
-    def set_match_index(self, match_index):
+    def get_next_indexes_bulk(self):
+        return self.read_all_state().get('next_index', {})
+
+    def set_next_index(self, peer_id, next_index):
+        state = self.read_all_state()
+        if 'next_index' not in state:
+            state['next_index'] = {}
+        state['next_index'][peer_id] = next_index
+        self.write_all_state(state)
+
+    def get_next_index(self, peer_id):
+        return self.read_all_state().get('next_index', {}).get(peer_id, 0)
+
+    def set_match_indexes_bulk(self, match_index):
         state = self.read_all_state()
         state['match_index'] = match_index
         self.write_all_state(state)
+
+    def get_match_indexes_bulk(self):
+        return self.read_all_state().get('match_index', {})
+
+    def set_match_index(self, peer_id, match_index):
+        state = self.read_all_state()
+        if 'match_index' not in state:
+            state['match_index'] = {}
+        state['match_index'][peer_id] = match_index
+        self.write_all_state(state)
+
+    def get_match_index(self, peer_id):
+        return self.read_all_state().get('match_index', {}).get(peer_id, 0)
 
     def reset_votes(self):
         '''Reset votes for a new election, set 'votes' to empty dict'''
