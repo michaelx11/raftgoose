@@ -21,13 +21,23 @@ class RaftBase(ABC):
         self.db = db
 
         # Try to load existing persistent state
-        self.db.load_persistent()
+        if not self.db.load_persistent():
+            # Initialize to starting state
+            self.db.set_term(0)
+            self.db.set_state('follower')
+            self.db.set_voted_for(None)
+            self.db.set_log([])
+            self.db.set_commit_index(0)
+            self.db.set_last_applied(0)
+            self.db.set_next_index({peer: 0 for peer in self.peers})
+            self.db.set_match_index({peer: 0 for peer in self.peers})
+            self.db.reset_votes()
+
+        # On initialization we always start as a follower
         self.db.set_state('follower')
 
         # Lock
         self.lock = threading.Lock()
-        # Internal thread condition variable
-        self.cv = threading.Condition(self.lock)
 
         self.election_timeout = 0.15 # 150ms
         self.last_heartbeat = timer.time()
@@ -222,7 +232,15 @@ class RaftBase(ABC):
 
 
     def pub_is_leader(self):
-        '''Return True if this node is the leader'''
+        '''Return True if this node is the leader
+
+        It is not sufficient to check the state of the node, because it may be isolated in a non-quorum
+        partition. This node will believe it is a leader but the true test is whether
+        it can achieve majority consensus on a log entry.
+
+        So we need to send an append_entry RPC to all peers and see if we get a majority of replies.
+        At which point we return True.
+        '''
         # Acquire the lock to get consistent state
         # NOTE: might be possible to do this without the lock, but it's safer and costs little
         try:
@@ -243,6 +261,8 @@ class RaftBase(ABC):
         self.last_heartbeat = self.timer.time()
         self.election_timeout = random.uniform(0.15, 0.3)
         # Vote for self
+        self.db.reset_votes()
+        self.db.add_vote(rpc['node_id'], rpc['vote_granted'])
         self.db.set_voted_for(self.node_id)
         # Send request_vote to all peers
         message = {
@@ -284,6 +304,12 @@ class RaftBase(ABC):
             if not is_leader and election_elapsed:
                 with self.lock:
                     self._start_election()
+
+            # If you're the leader, send some heartbeat messages ONLY IF LEADER
+            if is_leader:
+                # Send heartbeat
+                with self.lock:
+                    self._send_heartbeats()
 
             # Send all messages in outbox, no need to lock here
             while not self.outbox.empty():
