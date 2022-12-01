@@ -415,7 +415,14 @@ class RaftBase(ABC):
                 # If status is not leader return False immediately
                 if self.db.get_status() != 'leader':
                     return False
-                # the rest of the work is for network partitions and multiple leaders
+                # NOTE: Uncomment below to break leader election
+                # this will return multiple leaders and the event of network partition
+                # ========================
+                # else:
+                #     return True
+                # ========================
+
+                # The rest of the work is for network partitions and multiple leaders
                 # Append an empty entry to the log
                 self.db.append_log({'term': self.db.get_term(), 'index': self.db.get_log_length() + 1, 'command': 'check_leader'})
                 curr_log_length = self.db.get_log_length()
