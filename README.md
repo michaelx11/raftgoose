@@ -4,9 +4,12 @@
 
 ## References
 
-[raft made simple](https://levelup.gitconnected.com/raft-consensus-protocol-made-simpler-922c38675181)
-[cluster size safely modifiable if one at a time](https://eileen-code4fun.medium.com/raft-cluster-membership-change-protocol-f57cc17d1c03)
-[raftscope example impl for reference](https://github.com/ongardie/raftscope/blob/5b0c10ab51f873721895e7470b49e04c94bf826f/raft.js)
+
+- [original paper](https://raft.github.io/raft.pdf)
+- [raft made simple](https://levelup.gitconnected.com/raft-consensus-protocol-made-simpler-922c38675181)
+- [cluster size safely modifiable if one at a time](https://eileen-code4fun.medium.com/raft-cluster-membership-change-protocol-f57cc17d1c03)
+- [raftscope example impl for reference](https://github.com/ongardie/raftscope/blob/5b0c10ab51f873721895e7470b49e04c94bf826f/raft.js)
+
 
 ## Design
 
