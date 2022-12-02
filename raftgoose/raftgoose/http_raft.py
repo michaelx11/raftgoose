@@ -1,3 +1,4 @@
+import time
 import sys
 import json
 import logging
@@ -54,7 +55,7 @@ class HttpRaft(RaftBase):
                         self.send_response(400)
                         self.end_headers()
                         return
-                    self.raft_node.recv_message((msg['peer'], msg['msg']))
+                    self.raft_node.receive_message(msg['peer'], msg['msg'])
                 self.send_response(200)
                 self.end_headers()
             elif self.path == '/stop':
@@ -138,6 +139,8 @@ class HttpRaft(RaftBase):
             try:
                 peer_id, msg = self.inbox.get()
                 self.recv_message((peer_id, msg))
+                time.sleep(0.5)
+                print("inbox queue size: ", self.inbox.qsize())
             except queue.Empty:
                 pass
 
@@ -147,6 +150,9 @@ class HttpRaft(RaftBase):
             try:
                 peer_id, msg = self.outbox.get()
                 self.logger.debug('send_message {} {}'.format(peer_id, msg))
+                if peer_id == self.node_id:
+                    self.receive_message(peer_id, msg)
+                    continue
                 try:
                     data = {
                         'peer': self.node_id,
@@ -164,6 +170,8 @@ class HttpRaft(RaftBase):
                         response.read()
                 except Exception as e:
                     self.logger.debug('Error sending message to peer {}: {}'.format(peer_id, e))
+                time.sleep(0.5)
+                print("queue size: ", self.outbox.qsize())
             except queue.Empty:
                 pass
 
@@ -176,5 +184,5 @@ if __name__ == '__main__':
     node_ports = [str(i) for i in range(8900, 8905)]
     logging.basicConfig(level=logging.DEBUG)
     logger = logging.getLogger('raft_{}'.format(port))
-    node = HttpRaft(port, node_ports, logger=logger, timeout=10.0, heartbeat=1.0, client_timeout=5.0)
+    node = HttpRaft(port, node_ports, logger=logger, timeout=20.0, heartbeat=0.5, client_timeout=10.0)
     node.start_server()

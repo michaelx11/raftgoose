@@ -448,7 +448,7 @@ class RaftBase(ABC):
                             if self.db.get_last_applied() >= self.db.get_log_length():
                                 wait_condition.notify()
                                 return
-                    time.sleep(0.005)
+                    time.sleep(self.client_timeout / 10.0 + 0.01)
                     if time.time() - start_time > self.client_timeout - 0.020:
                         return
             check_leader_thread = threading.Thread(target=_check_leader)
@@ -505,6 +505,8 @@ class RaftBase(ABC):
             if not self.running:
                 return
 
+            self.logger.info('===================== LOOOOOOOOOOOOOOOOOOOOOOOOPING')
+
             # Check for election timeout or need to heartbeat
             is_leader = self.db.get_status() == 'leader'
             election_elapsed = self.timer.time() > self.election_timeout
@@ -521,7 +523,7 @@ class RaftBase(ABC):
                 # TODO: update peer list with add/remove operation
 
             # Pull all messages from inbox non-blocking until empty (non-blocking)
-            limit = 100
+            limit = 10
             while not self.inbox.empty() and limit > 0:
                 try:
                     peer, rpc = self.inbox.get_nowait()
@@ -564,12 +566,15 @@ class RaftBase(ABC):
                         self.outbox.put((peer, message))
 
             # Send all messages in outbox, no need to lock here
-            while not self.outbox.empty():
+            limit = 10
+            while not self.outbox.empty() and limit > 0:
                 try:
                     peer, message = self.outbox.get_nowait()
                     # Shouldn't need to check for outdated because protocol is robust
                     # to out of order messages (or should be)
+                    self.logger.debug('Sending message {} to {}'.format(message, peer))
                     self.send_message(peer, message)
+                    limit -= 1
                 except queue.Empty:
                     break
 
