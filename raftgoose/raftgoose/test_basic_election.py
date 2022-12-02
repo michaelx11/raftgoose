@@ -21,18 +21,18 @@ class TestBasicElection():
             self.last_leader = leaders[0].node_id
             return True
 
-        test_harness.run([
+        return test_harness.run([
             ('start', node_ids),
             ('delay_ms', 500),
             ('run_assert', assert_one_leader),
-#            ('stop_leader', None),
-#            ('delay_ms', 500),
-#            ('run_assert', assert_one_leader),
-#            ('stop', node_ids),
+            ('stop_leader', None),
+            ('delay_ms', 500),
+            ('run_assert', assert_one_leader),
+            ('stop', node_ids),
         ])
 
 if __name__ == '__main__':
-    for i in range(10):
+    for i in range(100):
         print('Running test {}'.format(i))
-        TestBasicElection().test_basic_election(quiet=True)
+        assert TestBasicElection().test_basic_election(quiet=False)
 

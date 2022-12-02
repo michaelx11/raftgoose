@@ -13,7 +13,7 @@ class TestElectionPartition():
                 return False
             return True
 
-        test_harness.run([
+        return test_harness.run([
             ('start', node_ids),
             ('delay_ms', 500),
             ('run_assert', assert_one_leader),
@@ -26,4 +26,4 @@ class TestElectionPartition():
 if __name__ == '__main__':
     for i in range(100):
         print('Test run: {}'.format(i))
-        TestElectionPartition().test_election_after_partition(quiet=True)
+        assert TestElectionPartition().test_election_after_partition(quiet=False)

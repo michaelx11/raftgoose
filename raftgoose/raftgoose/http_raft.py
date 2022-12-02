@@ -140,8 +140,8 @@ if __name__ == '__main__':
     # Do it five times with multiple threads
     nodes = []
     node_ports = [str(i) for i in range(8900, 8905)]
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.DEBUG)
     for port in node_ports:
         logger = logging.getLogger('raft_{}'.format(port))
-        nodes.append(HttpRaft(port, node_ports, logger=logger, timeout=0.3, heartbeat=0.05))
+        nodes.append(HttpRaft(port, node_ports, logger=logger, timeout=5.8, heartbeat=0.50, client_timeout=3.5))
         nodes[-1].start_server()
