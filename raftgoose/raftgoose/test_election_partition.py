@@ -15,12 +15,11 @@ class TestElectionPartition():
 
         test_harness.run([
             ('start', node_ids),
-            ('delay_ms', 250),
+            ('delay_ms', 500),
             ('run_assert', assert_one_leader),
             ('partition', ['0', '1'], ['2', '3', '4']),
-            ('delay_ms', 250),
+            ('delay_ms', 500),
             ('run_assert', assert_one_leader),
-            ('delay_ms', 250),
             ('stop', node_ids),
         ])
 
