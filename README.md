@@ -6,9 +6,9 @@ Design a distributed system such that only one node is "goose" and others are "d
 
 ## Solution
 
-Chosen: Use Raft, isLeader = (True if node thinks it is leader and can execute a committed request, otherwise False)
+Chosen: Use Raft, isLeader = True if node thinks it is leader and can execute a committed request, otherwise False
 
-NOTE: It is not sufficient to check the node's own state for leadership. In Raft the leader in a non-quorum partition might not ever step down (how does it know the network isn't super slow).
+NOTE: It is not sufficient to check the node's own state for leadership. In Raft, the leader in a non-quorum partition might not ever step down (how does it know the network isn't just super slow?).
 In our solution, we simulate a client request and wait for a committed response to return "goose".
 
 Possible Alternative: Design a subset of Raft, but I think the probability of making some concurrency mistake in a custom protocol is too high.
@@ -23,7 +23,7 @@ It's important that we can only have one add/remove peer operation in flight at 
 
 Using the above technique, we can add or remove hardware from the pool at any time. For pure software upgrades, we can simply stop a node and then restart it.
 
-Note: current example implementation does not persist the database, but it's easy to imaged a version of MemoryDB that does JSON writes to a file on disk.
+Note: current example implementation does not persist the database, but it's easy to imagine a version of MemoryDB that does JSON writes to a file on disk.
 
 ## References
 
@@ -36,7 +36,7 @@ Note: current example implementation does not persist the database, but it's eas
 
 ## Design
 
-Goals:
+Initial Goals:
 - No dependencies, so I chose pure Python + simple file storage
 - Robust test framework
 - Implement Raft algorithm
@@ -51,13 +51,13 @@ This allows us to test the main logic without use of HTTP or other complications
 2. Swappable database and Raft communication 
 3. Simple custom test harness
 
-Timings are not very tight (allow 0.8 seconds for leader election) but can be tuned later. Timings for MemoryRaft (the in memory version) are much tighter.
+Timings are not very tight (allow 0.8 seconds for leader election) but can be tuned later. Timings for MemoryRaft (the pure in-memory messaging version) are much tighter.
 
-In terms of correctness, there are almost certainly subtle bugs at this point. An exhaustive test suite is required. Do not use in production.
+In terms of correctness, there are almost certainly subtle bugs at this point. An exhaustive test suite is required. Do not use in production or for anything beyond a toy really.
 
 ## How to Use
 
-If you have Python 3.7+, just run `raftgoose/http_raft.py`. The command will print out the ports addresses of the cluster nodes along with a ton of logs.
+If you have Python 3.7+, just run `raftgoose/http_raft.py`. The command will print out the ports of the five cluster nodes along with a few logs.
 
 You can use scripts to interact with the system, for example choosing network partitions or pausing/killing/restarting nodes.
 
@@ -69,53 +69,53 @@ These tests were used extensively in development, you can make them more with `-
 
 ### Example Interaction
 ```
-(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+(base) ➜  duckduckgoose git:(main) ✗ ./find_goose.sh
 9900: duck
 9901: duck
 9902: duck
 9903: duck
 9904: goose
-(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+(base) ➜  duckduckgoose git:(main) ✗ ./find_goose.sh
 9900: duck
 9901: duck
 9902: duck
 9903: duck
 9904: goose
-(base) ➜  duckduckgoose git:(main) ✗ bash startstop.sh 9904 stop
+(base) ➜  duckduckgoose git:(main) ✗ .startstop.sh 9904 stop
 stop
-(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+(base) ➜  duckduckgoose git:(main) ✗ ./find_goose.sh
 9900: duck
 9901: duck
 9902: duck
 9903: duck
 9904: duck
-(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+(base) ➜  duckduckgoose git:(main) ✗ ./find_goose.sh
 9900: duck
 9901: goose
 9902: duck
 9903: duck
 9904: duck
-(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+(base) ➜  duckduckgoose git:(main) ✗ ./find_goose.sh
 9900: duck
 9901: goose
 9902: duck
 9903: duck
 9904: duck
-(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+(base) ➜  duckduckgoose git:(main) ✗ ./find_goose.sh
 9900: duck
 9901: goose
 9902: duck
 9903: duck
 9904: duck
-(base) ➜  duckduckgoose git:(main) ✗ bash startstop.sh 9901 stop
+(base) ➜  duckduckgoose git:(main) ✗ .startstop.sh 9901 stop
 stop
-(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+(base) ➜  duckduckgoose git:(main) ✗ ./find_goose.sh
 9900: duck
 9901: duck
 9902: duck
 9903: duck
 9904: duck
-(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+(base) ➜  duckduckgoose git:(main) ✗ ./find_goose.sh
 9900: goose
 9901: duck
 9902: duck
@@ -127,34 +127,34 @@ stop
 
 Notice how after we stop the leader in 2,3,4 partition there cannot be a new goose because no quorum
 ```
-(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+(base) ➜  duckduckgoose git:(main) ✗ ./find_goose.sh
 9900: goose
 9901: duck
 9902: duck
 9903: duck
 9904: duck
 (base) ➜  duckduckgoose git:(main) ✗ ./partition.sh
-(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+(base) ➜  duckduckgoose git:(main) ✗ ./find_goose.sh
 9900: duck
 9901: duck
 9902: duck
 9903: duck
 9904: goose
-(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+(base) ➜  duckduckgoose git:(main) ✗ ./find_goose.sh
 9900: duck
 9901: duck
 9902: duck
 9903: duck
 9904: goose
-(base) ➜  duckduckgoose git:(main) ✗ bash startstop.sh 9904 stop
+(base) ➜  duckduckgoose git:(main) ✗ .startstop.sh 9904 stop
 stop
-(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+(base) ➜  duckduckgoose git:(main) ✗ ./find_goose.sh
 9900: duck
 9901: duck
 9902: duck
 9903: duck
 9904: duck
-(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+(base) ➜  duckduckgoose git:(main) ✗ ./find_goose.sh
 9900: duck
 9901: duck
 9902: duck
