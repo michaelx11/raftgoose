@@ -4,17 +4,15 @@ class TestBasicElection():
 
     last_leader = None
 
-    def test_basic_election(self):
-        test_harness = MemoryTestHarness(5)
+    def test_basic_election(self, quiet=False):
+        test_harness = MemoryTestHarness(5, quiet=quiet)
         node_ids = list(map(str, range(5)))
 
         def assert_one_leader(nodes):
-            print('running assert_one_leader')
             leaders = [node for node in nodes if node.pub_is_leader()]
             if len(leaders) != 1:
                 print("Leader results: {}".format(leaders))
                 return False
-            print('Got leader: {}'.format(leaders[0].node_id))
             # Make sure we don't get the same leader
             if self.last_leader is not None:
                 if self.last_leader == leaders[0].node_id:
@@ -35,5 +33,7 @@ class TestBasicElection():
         ])
 
 if __name__ == '__main__':
-    TestBasicElection().test_basic_election()
+    for i in range(100):
+        print('Running test {}'.format(i))
+        TestBasicElection().test_basic_election(quiet=True)
 

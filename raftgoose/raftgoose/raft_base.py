@@ -294,7 +294,7 @@ class RaftBase(ABC):
         if success:
             for entry in rpc['entries']:
                 if entry['index'] > log_len - 1:
-                    self.logger.warning('Appending entry: {}'.format(entry))
+                    self.logger.debug('Appending entry: {}'.format(entry))
                     self.db.append_log(entry)
             # Reset the election timeout
             self.reset_election_timeout()
@@ -332,7 +332,7 @@ class RaftBase(ABC):
             if majority > self.db.get_commit_index() and self.db.get_log()[majority]['term'] == self.db.get_term():
                 self.logger.debug('Majority match index is {}'.format(majority))
                 # Set commit index to majority
-                self.logger.warning('Committing index {}'.format(majority))
+                self.logger.debug('Committing index {}'.format(majority))
                 self.db.set_commit_index(majority)
 
     def _process_append_entry_reply(self, peer, rpc):
@@ -423,7 +423,7 @@ class RaftBase(ABC):
                 # ========================
 
                 # The rest of the work is for network partitions and multiple leaders
-                self.logger.warning('Appending empty entry to log to test for leader')
+                self.logger.debug('Appending empty entry to log to test for leader')
                 # First prune local log to match commit index
                 self.db.set_log(self.db.get_log()[1:self.db.get_commit_index() + 1])
                 # Append a check_leader entry to the log
@@ -438,7 +438,7 @@ class RaftBase(ABC):
                 while True:
                     with wait_condition:
                         with self.lock:
-                            self.logger.warning('Comparing last applied index {} to log length {}'.format(self.db.get_last_applied(), self.db.get_log()))
+                            self.logger.debug('Comparing last applied index {} to log length {}'.format(self.db.get_last_applied(), self.db.get_log()))
                             if self.db.get_last_applied() >= self.db.get_log_length():
                                 wait_condition.notify()
                                 return
@@ -453,9 +453,9 @@ class RaftBase(ABC):
                 # Now we check if last entry is committed
                 with self.lock:
                     if self.db.get_last_applied() >= self.db.get_log_length():
-                        self.logger.warning('Leader check successful')
+                        self.logger.debug('Leader check successful')
                         return True
-                    self.logger.warning('Leader check failed')
+                    self.logger.debug('Leader check failed')
                     return False
 
     def _start_election(self):

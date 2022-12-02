@@ -38,7 +38,7 @@ class MemoryTestHarness:
                 elif cmd[0] == 'stop_leader':
                     for nodes in self.nodes.values():
                         if nodes.pub_is_leader():
-                            self.logger.warning('Stopping leader: %s', nodes.node_id)
+                            self.logger.info('Stopping leader: %s', nodes.node_id)
                             nodes.stop()
                             break
                 elif cmd[0] == 'delay_ms':
@@ -52,12 +52,12 @@ class MemoryTestHarness:
                         self.logger.warning('Assertion failed on command index [{}]: {}'.format(index, cmd))
                         # Print the state of the databases + command list
                         for node in self.nodes.values():
-                            self.logger.warning(node.node_id, node.db.read_all_state())
+                            self.logger.warning('{} {}'.format(node.node_id, node.db.read_all_state()))
                         return False
     
             # Print the state of the databases + command list
             for node in self.nodes.values():
-                self.logger.info(node.node_id, node.db.read_all_state())
+                self.logger.info('{} {}'.format(node.node_id, node.db.read_all_state()))
             return True
         finally:
             for node in self.nodes.values():
