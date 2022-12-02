@@ -8,6 +8,9 @@ Design a distributed system such that only one node is "goose" and others are "d
 
 Chosen: Use Raft, isLeader = (True if node thinks it is leader and can execute a committed request, otherwise False)
 
+NOTE: It is not sufficient to check the node's own state for leadership. In Raft the leader in a non-quorum partition might not ever step down (how does it know the network isn't super slow).
+In our solution, we simulate a client request and wait for a committed response to return "goose".
+
 Possible Alternative: Design a subset of Raft, but I think the probability of making some concurrency mistake in a custom protocol is too high.
 
 **Adding Removing Nodes**
