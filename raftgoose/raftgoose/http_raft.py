@@ -1,3 +1,4 @@
+import time
 import json
 import logging
 import threading
@@ -41,6 +42,7 @@ class HttpRaft(RaftBase):
 
         def do_POST(self):
             '''Called by HTTPServer'''
+            start_time = time.time()
             if self.path == '/msg':
                 length = int(self.headers['Content-Length'])
                 msg = self.rfile.read(length)
@@ -77,6 +79,9 @@ class HttpRaft(RaftBase):
             else:
                 self.send_response(404)
                 self.end_headers()
+            
+            elapsed_time = time.time() - start_time
+            # self.raft_node.logger.info('Elapsed time: %f', elapsed_time)
 
 
         def do_GET(self):
@@ -143,5 +148,5 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     for port in node_ports:
         logger = logging.getLogger('raft_{}'.format(port))
-        nodes.append(HttpRaft(port, node_ports, logger=logger, timeout=0.3, heartbeat=0.05))
+        nodes.append(HttpRaft(port, node_ports, logger=logger, timeout=0.2, heartbeat=0.05))
         nodes[-1].start_server()

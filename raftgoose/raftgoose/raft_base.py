@@ -166,12 +166,11 @@ class RaftBase(ABC):
             self._step_down(rpc)
 
         # If term is less than current term, ignore
-
         vote_granted = True
         if rpc['term'] < self.db.get_term():
             vote_granted = False
         # Check if we've already voted for someone for this current term and it's not ourselves
-        if self.db.get_voted_for() is not None and self.db.get_voted_for() != self.node_id:
+        if self.db.get_voted_for() is not None and self.node_id != rpc['candidate_id']:
             vote_granted = False
         # Check if the candidate's log is up to date
         curr_log = self.db.get_log()
@@ -191,7 +190,8 @@ class RaftBase(ABC):
         }
         if vote_granted:
             # Vote for the candidate
-            self.db.set_voted_for(rpc['candidate_id'])
+            if rpc['candidate_id'] != self.node_id:
+                self.db.set_voted_for(rpc['candidate_id'])
             # Reset election timeout
             self.reset_election_timeout()
 
@@ -297,7 +297,7 @@ class RaftBase(ABC):
         if success:
             for entry in rpc['entries']:
                 if entry['index'] > log_len - 1:
-                    self.logger.debug('Appending entry: {}'.format(entry))
+                    self.logger.info('Appending entry: {}'.format(entry))
                     self.db.append_log(entry)
             # Reset the election timeout
             self.reset_election_timeout()
@@ -332,6 +332,9 @@ class RaftBase(ABC):
         if len(match_index) > 0:
             # Compute majority
             majority = match_index[len(match_index) // 2]
+            # If majority greater than log length then abort
+            if majority > self.db.get_log_length():
+                return
             if majority > self.db.get_commit_index() and self.db.get_log()[majority]['term'] == self.db.get_term():
                 self.logger.info('Majority match index is {}'.format(majority))
                 # Set commit index to majority
@@ -365,7 +368,7 @@ class RaftBase(ABC):
             # Update nextIndex and matchIndex for follower
             self.db.set_next_index(peer, rpc['original_rpc']['prev_log_index'] + len(rpc['original_rpc']['entries']) + 1)
             self.db.set_match_index(peer, rpc['original_rpc']['prev_log_index'] + len(rpc['original_rpc']['entries']))
-            self.logger.debug('Updating nextIndex and matchIndex for follower {} to {} and {}'.format(peer, rpc['original_rpc']['prev_log_index'] + len(rpc['original_rpc']['entries']) + 1, rpc['original_rpc']['prev_log_index'] + len(rpc['original_rpc']['entries'])))
+            self.logger.info('Updating nextIndex and matchIndex for follower {} to {} and {}'.format(peer, rpc['original_rpc']['prev_log_index'] + len(rpc['original_rpc']['entries']) + 1, rpc['original_rpc']['prev_log_index'] + len(rpc['original_rpc']['entries'])))
             # Check if we can commit any new entries
             self._check_commit()
         else:
@@ -412,6 +415,7 @@ class RaftBase(ABC):
         At which point we return True.
         '''
         # need to acquire a global client request lock
+        start_time = time.time()
         with self.client_request_lock:
             curr_log_length = 0
             with self.lock:
@@ -441,24 +445,27 @@ class RaftBase(ABC):
                 while True:
                     with wait_condition:
                         with self.lock:
-                            self.logger.info('Comparing last applied index {} to log length {}'.format(self.db.get_last_applied(), self.db.get_log()))
+                            self.logger.debug('Comparing last applied index {} to log length {}'.format(self.db.get_last_applied(), self.db.get_log()))
                             if self.db.get_last_applied() >= self.db.get_log_length():
                                 wait_condition.notify()
                                 return
-                    time.sleep(0.005)
-                    if time.time() - start_time > 0.250:
+                    time.sleep(0.025)
+                    if time.time() - start_time > 1:
+                        self.logger.info('Timed out waiting for leader check')
                         return
             check_leader_thread = threading.Thread(target=_check_leader)
             check_leader_thread.start()
             # Now wait for the condition to be notified for 250ms
             with wait_condition:
-                wait_condition.wait(0.25)
+                wait_condition.wait(1.25)
                 # Now we check if last entry is committed
                 with self.lock:
                     if self.db.get_last_applied() >= self.db.get_log_length():
                         self.logger.info('Leader check successful')
+                        self.logger.info('Elapsed time: {}'.format(time.time() - start_time))
                         return True
                     self.logger.info('Leader check failed')
+                    self.logger.info('Elapsed time: {}'.format(time.time() - start_time))
                     return False
 
     def _start_election(self):
