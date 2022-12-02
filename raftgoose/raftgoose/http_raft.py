@@ -37,7 +37,7 @@ class HttpRaft(RaftBase):
 
         def log_message(self, format, *args):
             '''redirect request logging'''
-            self.raft_node.logger.debug(format, *args)
+            # self.raft_node.logger.debug(format, *args)
 
         def do_POST(self):
             '''Called by HTTPServer'''
@@ -128,6 +128,9 @@ class HttpRaft(RaftBase):
             headers = {"Content-Type": "application/json; charset=UTF-8"}
             
             httprequest = Request(url, data=postdata, method="POST", headers=headers)
+
+            with urlopen(httprequest) as response:
+                response.read()
         except Exception as e:
             print('Error sending message to peer', peer_id, e)
 

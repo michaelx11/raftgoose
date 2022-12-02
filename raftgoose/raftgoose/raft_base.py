@@ -145,6 +145,7 @@ class RaftBase(ABC):
 
     def recv_message(self, message):
         '''Receive a message from a peer'''
+        self.logger.debug('Received message: {}'.format(message))
         self.inbox.put(message)
 
 
@@ -220,7 +221,7 @@ class RaftBase(ABC):
         # Check if we've won the election
         if sum(self.db.get_votes().values()) > len(self.peers) / 2:
             # We've won the election!
-            self.logger.debug('We won the election at term: {}!'.format(self.db.get_term()))
+            self.logger.info('We won the election at term: {}!'.format(self.db.get_term()))
             self.db.set_status('leader')
             # Reset the heartbeat timer
             self.reset_election_timeout()
@@ -423,7 +424,7 @@ class RaftBase(ABC):
                 # ========================
 
                 # The rest of the work is for network partitions and multiple leaders
-                self.logger.debug('Appending empty entry to log to test for leader')
+                self.logger.info('Appending empty entry to log to test for leader')
                 # First prune local log to match commit index
                 self.db.set_log(self.db.get_log()[1:self.db.get_commit_index() + 1])
                 # Append a check_leader entry to the log
@@ -438,7 +439,7 @@ class RaftBase(ABC):
                 while True:
                     with wait_condition:
                         with self.lock:
-                            self.logger.debug('Comparing last applied index {} to log length {}'.format(self.db.get_last_applied(), self.db.get_log()))
+                            self.logger.info('Comparing last applied index {} to log length {}'.format(self.db.get_last_applied(), self.db.get_log()))
                             if self.db.get_last_applied() >= self.db.get_log_length():
                                 wait_condition.notify()
                                 return
@@ -453,9 +454,9 @@ class RaftBase(ABC):
                 # Now we check if last entry is committed
                 with self.lock:
                     if self.db.get_last_applied() >= self.db.get_log_length():
-                        self.logger.debug('Leader check successful')
+                        self.logger.info('Leader check successful')
                         return True
-                    self.logger.debug('Leader check failed')
+                    self.logger.info('Leader check failed')
                     return False
 
     def _start_election(self):
@@ -465,6 +466,7 @@ class RaftBase(ABC):
         # Increment term
         self.db.set_term(self.db.get_term() + 1)
         self.logger.debug('Starting election with term {}'.format(self.db.get_term()))
+        self.logger.info('Setting status to candidate')
         # Set state to candidate
         self.db.set_status('candidate')
         # Reset last_heartbeat and election timeout
