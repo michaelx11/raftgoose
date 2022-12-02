@@ -57,9 +57,25 @@ class HttpRaft(RaftBase):
                             # Drop message
                             self.send_response(400)
                             self.end_headers()
+                            self.raft_node.logger.info('dropping message from %s', msg['peer'])
                             return
-                        self.raft_node.logger.debug('http received message from %s: %s', msg['peer'], msg['msg'])
+                        self.raft_node.logger.info('http received message from %s: %s', msg['peer'], msg['msg'])
                         self.raft_node.recv_message((msg['peer'], msg['msg']))
+                    self.send_response(200)
+                    self.end_headers()
+                    return
+                elif self.path == '/partition':
+                    # TODO: this is abstraction breaking since it's not control but
+                    # it's easier to do it here since there's a lock alreaday
+                    length = int(self.headers['Content-Length'])
+                    msg = self.rfile.read(length)
+                    msg = json.loads(msg.decode('utf-8'))
+                    with self.lock:
+                        # Drop all messages from peers in msg['peers']
+                        self.dropped_peers = defaultdict(lambda: False)
+                        for peer in msg['peers']:
+                            self.dropped_peers[peer] = True
+                            self.raft_node.logger.warning('dropping messages from %s', peer)
                     self.send_response(200)
                     self.end_headers()
                     return
@@ -70,21 +86,12 @@ class HttpRaft(RaftBase):
 
             if self.path == '/stop':
                 self.raft_node.stop()
+                self.raft_node.logger.warning('node: %s stopping', self.raft_node.node_id)
                 self.send_response(200)
                 self.end_headers()
             elif self.path == '/start':
                 self.raft_node.start()
-                self.send_response(200)
-                self.end_headers()
-            elif self.path == '/partition':
-                length = int(self.headers['Content-Length'])
-                msg = self.rfile.read(length)
-                msg = json.loads(msg.decode('utf-8'))
-                with self.lock:
-                    # Drop all messages from peers in msg['peers']
-                    self.dropped_peers = defaultdict(lambda: False)
-                    for peer in msg['peers']:
-                        self.dropped_peers[peer] = True
+                self.raft_node.logger.warning('node: %s started', self.raft_node.node_id)
                 self.send_response(200)
                 self.end_headers()
             else:
@@ -167,8 +174,8 @@ if __name__ == '__main__':
     # Do it five times with multiple threads
     nodes = []
     node_ports = [str(i) for i in range(8900, 8905)]
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.INFO)
     for port in node_ports:
         logger = logging.getLogger('raft_{}'.format(port))
-        nodes.append(HttpRaft(port, node_ports, logger=logger, timeout=1.0, heartbeat=0.20, client_timeout=0.5))
+        nodes.append(HttpRaft(port, node_ports, logger=logger, timeout=0.8, heartbeat=0.15, client_timeout=0.6))
         nodes[-1].start_server()

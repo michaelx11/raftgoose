@@ -30,6 +30,64 @@ This allows us to test the main logic without use of HTTP or other complications
 
 ## How to Use
 
-If you have Python 3.7+, just run `start_cluster.py [num nodes]`. The command will print out the IP addresses of the cluster nodes.
+If you have Python 3.7+, just run `raftgoose/http_raft.py`. The command will print out the ports addresses of the cluster nodes along with a ton of logs.
 
-You can use the console to interact with the system, for example choosing network partitions or pausing/killing/restarting nodes.
+You can use scripts to interact with the system, for example choosing network partitions or pausing/killing/restarting nodes.
+
+### Example Interaction
+```
+(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+9900: duck
+9901: duck
+9902: duck
+9903: duck
+9904: goose
+(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+9900: duck
+9901: duck
+9902: duck
+9903: duck
+9904: goose
+(base) ➜  duckduckgoose git:(main) ✗ bash startstop.sh 9904 stop
+stop
+(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+9900: duck
+9901: duck
+9902: duck
+9903: duck
+9904: duck
+(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+9900: duck
+9901: goose
+9902: duck
+9903: duck
+9904: duck
+(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+9900: duck
+9901: goose
+9902: duck
+9903: duck
+9904: duck
+(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+9900: duck
+9901: goose
+9902: duck
+9903: duck
+9904: duck
+(base) ➜  duckduckgoose git:(main) ✗ bash startstop.sh 9901 stop
+stop
+(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+9900: duck
+9901: duck
+9902: duck
+9903: duck
+9904: duck
+(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+9900: goose
+9901: duck
+9902: duck
+9903: duck
+9904: duck
+```
+
+### Example Partition (hardcoded to 8900,8901 | 8902,8903,8904)
