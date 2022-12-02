@@ -27,10 +27,15 @@ class HttpRaft(RaftBase):
             return self.db
 
     class HttpRaftHandler(BaseHTTPRequestHandler):
+        '''Need to run two servers, one for raft communicatino and one for control
 
-        def __init__(self, raft_node, *args, **kwargs):
+        Otherwise, waiting on /goose will block raft communication
+        '''
+
+        def __init__(self, raft_node, is_control_server, *args, **kwargs):
             self.raft_node = raft_node
             self.lock = threading.Lock()
+            self.is_control_server = is_control_server
             # Dropped peers
             self.dropped_peers = defaultdict(lambda: False)
             super().__init__(*args, **kwargs)
@@ -41,21 +46,29 @@ class HttpRaft(RaftBase):
 
         def do_POST(self):
             '''Called by HTTPServer'''
-            if self.path == '/msg':
-                length = int(self.headers['Content-Length'])
-                msg = self.rfile.read(length)
-                # Deserialize message as { peer: "string", msg: {}}
-                msg = json.loads(msg.decode('utf-8'))
-                with self.lock:
-                    if self.dropped_peers[msg['peer']]:
-                        # Drop message
-                        self.send_response(400)
-                        self.end_headers()
-                        return
-                    self.raft_node.recv_message((msg['peer'], msg['msg']))
-                self.send_response(200)
-                self.end_headers()
-            elif self.path == '/stop':
+            if not self.is_control_server:
+                if self.path == '/msg':
+                    length = int(self.headers['Content-Length'])
+                    msg = self.rfile.read(length)
+                    # Deserialize message as { peer: "string", msg: {}}
+                    msg = json.loads(msg.decode('utf-8'))
+                    with self.lock:
+                        if self.dropped_peers[msg['peer']]:
+                            # Drop message
+                            self.send_response(400)
+                            self.end_headers()
+                            return
+                        self.raft_node.logger.debug('http received message from %s: %s', msg['peer'], msg['msg'])
+                        self.raft_node.recv_message((msg['peer'], msg['msg']))
+                    self.send_response(200)
+                    self.end_headers()
+                    return
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+
+            if self.path == '/stop':
                 self.raft_node.stop()
                 self.send_response(200)
                 self.end_headers()
@@ -81,6 +94,11 @@ class HttpRaft(RaftBase):
 
         def do_GET(self):
             '''Called by HTTPServer'''
+            if not self.is_control_server:
+                self.send_response(400)
+                self.end_headers()
+                return
+
             if self.path == '/goose':
                 self.send_response(200)
                 self.send_header('Content-type', 'text/html')
@@ -101,12 +119,20 @@ class HttpRaft(RaftBase):
     def __init__(self, node_id, peers, **kwargs):
         super().__init__(node_id, peers, HttpRaft.MemoryDb(), **kwargs)
         self.db = self.MemoryDb()
-        handler = partial(HttpRaft.HttpRaftHandler, self)
+        # Raft communication
+        handler = partial(HttpRaft.HttpRaftHandler, self, False)
         self.server = HTTPServer(('127.0.0.1', int(self.node_id)), handler)
+        # Control server
+        control_handler = partial(HttpRaft.HttpRaftHandler, self, True)
+        # Add 1000 to port number to avoid conflict
+        self.control_server = HTTPServer(('127.0.0.1', int(self.node_id) + 1000), control_handler)
 
     def start_server(self):
         self.server_thread = threading.Thread(target=self.server.serve_forever)
         self.server_thread.start()
+        self.control_server_thread = threading.Thread(target=self.control_server.serve_forever)
+        self.control_server_thread.start()
+        # Start Raft
         self.start()
 
     def auth_rpc(self, peer_id, msg):
@@ -137,11 +163,12 @@ class HttpRaft(RaftBase):
 
 if __name__ == '__main__':
     # Bring up a 5 node raft cluster with ports 8900-8904
+    # Control servers are 8900-8904, raft communiation happens on 9900-9904
     # Do it five times with multiple threads
     nodes = []
     node_ports = [str(i) for i in range(8900, 8905)]
     logging.basicConfig(level=logging.DEBUG)
     for port in node_ports:
         logger = logging.getLogger('raft_{}'.format(port))
-        nodes.append(HttpRaft(port, node_ports, logger=logger, timeout=5.8, heartbeat=0.50, client_timeout=3.5))
+        nodes.append(HttpRaft(port, node_ports, logger=logger, timeout=1.0, heartbeat=0.20, client_timeout=0.5))
         nodes[-1].start_server()

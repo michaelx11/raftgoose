@@ -485,7 +485,7 @@ class RaftBase(ABC):
                         if self.db.get_last_applied() >= self.db.get_log_length():
                             self.logger.info('Leader check succeeded')
                             return
-                    time.sleep(self.client_timeout / 20.0)
+                    time.sleep(self.client_timeout / 10.0)
                     if time.time() - start_time > self.client_timeout:
                         self.logger.info('Leader check timed out')
                         return
