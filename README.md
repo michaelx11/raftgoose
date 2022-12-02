@@ -1,11 +1,14 @@
 # Duck Duck Goose Implementation
 
+## Problem
+
+Design a distributed system such that only one node is "goose" and others are "ducks", must tolerate network partitions and the "goose" should always be on the side of a quorum. Otherwise no goose.
 
 ## Solution
 
 Chosen: Use Raft, isLeader = (True if node thinks it is leader and can execute a committed request, otherwise False)
 
-Possible: Design a subset of Raft, but I think the probability of making some concurrency mistake in a custom protocol is too high.
+Possible Alternative: Design a subset of Raft, but I think the probability of making some concurrency mistake in a custom protocol is too high.
 
 **Adding Removing Nodes**
 
@@ -40,6 +43,10 @@ Core Raft logic will live in a single abstract class. Subclasses must handle the
 This allows us to test the main logic without use of HTTP or other complications.
 
 ## Current State
+
+1. Pure Python3 (no deps) Raft implementation in one file
+2. Swappable database and Raft communication 
+3. Simple custom test harness
 
 Timings are not very tight (allow 0.8 seconds for leader election) but can be tuned later. Timings for MemoryRaft (the in memory version) are much tighter.
 
