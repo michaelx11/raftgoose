@@ -33,6 +33,7 @@ class MessageHub:
                 return
             if self.node_partition[sender] != self.node_partition[peer]:
                 # Prevent communication between partitions
+                self.logger.debug('Dropping message from %s to %s', sender, peer)
                 return
         with self.peer_locks[peer]:
             self.logger.debug('Sending message from {} to {}: {}'.format(sender, peer, message))
