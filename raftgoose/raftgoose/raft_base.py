@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 class RaftBase(ABC):
     '''A basic Raft implementation which accesses everything through expected methods for abstraction'''
 
-    def __init__(self, node_id, peers, db, timer=None, logger=None, timeout=0.15, heartbeat=0.02):
+    def __init__(self, node_id, peers, db, timer=None, logger=None, timeout=0.15, heartbeat=0.02, client_timeout=0.2):
         '''Initialize the RaftBase object
         
         Inject the timer to allow for easier testing
@@ -21,6 +21,7 @@ class RaftBase(ABC):
         self.db = db
         self.timeout = timeout
         self.heartbeat = heartbeat
+        self.client_timeout = client_timeout
 
         self.running = True
 
@@ -38,6 +39,8 @@ class RaftBase(ABC):
                 def process(self, msg, kwargs):
                     return '[node {}] {}'.format(self.extra['node_id'], msg), kwargs
             self.logger = CustomAdapter(logger, {'node_id': self.node_id})
+
+        self.logger.info('Initializing RaftBase with node_id: {}, peers: {}, timeout: {}, heartbeat: {}, client_timeout: {}'.format(node_id, peers, timeout, heartbeat, client_timeout))
 
         # Try to load existing persistent state
         if not self.db.load_persistent():
@@ -71,7 +74,6 @@ class RaftBase(ABC):
         '''Reset the election timeout'''
         self.election_timeout = self.timer.time() + random.uniform(self.timeout, 2 * self.timeout)
         self.logger.debug('Resetting election timeout to: {} from current {}'.format(self.election_timeout, self.timer.time()))
-        self.last_heartbeat = self.timer.time()
 
 
     # Abstract methods that subclasses must implement
@@ -195,6 +197,7 @@ class RaftBase(ABC):
             # Reset election timeout
             self.reset_election_timeout()
 
+        self.logger.debug('Sending request_vote_reply: {}'.format(msg))
         # Once it goes into the outbox it's as good as done from this node's perspective
         self.outbox.put((peer, msg))
 
@@ -331,7 +334,7 @@ class RaftBase(ABC):
         match_index = sorted(match_index.values())
         if len(match_index) > 0:
             # Compute majority
-            majority = match_index[len(match_index) // 2]
+            majority = match_index[len(match_index) // 2 - 1]
             if majority > self.db.get_commit_index() and self.db.get_log()[majority]['term'] == self.db.get_term():
                 self.logger.info('Majority match index is {}'.format(majority))
                 # Set commit index to majority
@@ -446,13 +449,13 @@ class RaftBase(ABC):
                                 wait_condition.notify()
                                 return
                     time.sleep(0.005)
-                    if time.time() - start_time > 0.250:
+                    if time.time() - start_time > self.client_timeout - 0.020:
                         return
             check_leader_thread = threading.Thread(target=_check_leader)
             check_leader_thread.start()
-            # Now wait for the condition to be notified for 250ms
+            # Now wait for the condition to be notified
             with wait_condition:
-                wait_condition.wait(0.25)
+                wait_condition.wait(self.client_timeout)
                 # Now we check if last entry is committed
                 with self.lock:
                     if self.db.get_last_applied() >= self.db.get_log_length():
@@ -518,7 +521,7 @@ class RaftBase(ABC):
                 # TODO: update peer list with add/remove operation
 
             # Pull all messages from inbox non-blocking until empty (non-blocking)
-            limit = 10
+            limit = 100
             while not self.inbox.empty() and limit > 0:
                 try:
                     peer, rpc = self.inbox.get_nowait()
@@ -554,7 +557,7 @@ class RaftBase(ABC):
                             'term': self.db.get_term(),
                             'leader_id': self.node_id,
                             'prev_log_index': next_index - 1,
-                            'prev_log_term': curr_log[next_index - 1]['term'] if next_index > 0 else 0,
+                            'prev_log_term': curr_log[next_index - 1]['term'],
                             'entries': curr_log[next_index:],
                             'leader_commit': self.db.get_commit_index(),
                         }
@@ -562,10 +565,13 @@ class RaftBase(ABC):
 
             # Send all messages in outbox, no need to lock here
             while not self.outbox.empty():
-                peer, message = self.outbox.get_nowait()
-                # Shouldn't need to check for outdated because protocol is robust
-                # to out of order messages (or should be)
-                self.send_message(peer, message)
+                try:
+                    peer, message = self.outbox.get_nowait()
+                    # Shouldn't need to check for outdated because protocol is robust
+                    # to out of order messages (or should be)
+                    self.send_message(peer, message)
+                except queue.Empty:
+                    break
 
             # Finally sleep until either next election timeout or next heartbeat if leader
             sleep_time = min(self.election_timeout - self.timer.time(), self.heartbeat) if not is_leader else self.heartbeat

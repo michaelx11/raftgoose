@@ -1,6 +1,8 @@
+import sys
 import json
 import logging
 import threading
+import queue
 
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -104,9 +106,16 @@ class HttpRaft(RaftBase):
         handler = partial(HttpRaft.HttpRaftHandler, self)
         self.server = HTTPServer(('127.0.0.1', int(self.node_id)), handler)
 
+        self.outbox = queue.Queue()
+        self.inbox = queue.Queue()
+
     def start_server(self):
         self.server_thread = threading.Thread(target=self.server.serve_forever)
         self.server_thread.start()
+        self.outbox_thread = threading.Thread(target=self.outbox_loop)
+        self.outbox_thread.start()
+        self.inbox_thread = threading.Thread(target=self.inbox_loop)
+        self.inbox_thread.start()
         self.start()
 
     def auth_rpc(self, peer_id, msg):
@@ -114,34 +123,58 @@ class HttpRaft(RaftBase):
         return True
 
     def send_message(self, peer_id, msg):
-        '''Send an HTTP message (POST /msg) with JSON to a peer on localhost, port = peer_id'''
-        self.logger.debug('send_message {} {}'.format(peer_id, msg))
-        try:
-            data = {
-                'peer': self.node_id,
-                'msg': msg
-            }
-            url = "http://localhost:{}/msg".format(peer_id)
-            
-            postdata = json.dumps(data).encode()
-            
-            headers = {"Content-Type": "application/json; charset=UTF-8"}
-            
-            httprequest = Request(url, data=postdata, method="POST", headers=headers)
+        '''Instant method which puts messages on the outbox
 
-            with urlopen(httprequest) as response:
-                response.read()
-        except Exception as e:
-            print('Error sending message to peer', peer_id, e)
+        NOTE: if this blocks we're doomed
+        '''
+        self.outbox.put((peer_id, msg))
+
+    def receive_message(self, peer_id, msg):
+        self.inbox.put((peer_id, msg))
+
+    def inbox_loop(self):
+        '''Receive messages from the inbox'''
+        while True:
+            try:
+                peer_id, msg = self.inbox.get()
+                self.recv_message((peer_id, msg))
+            except queue.Empty:
+                pass
+
+    def outbox_loop(self):
+        '''Send an HTTP message (POST /msg) with JSON to a peer on localhost, port = peer_id'''
+        while True:
+            try:
+                peer_id, msg = self.outbox.get()
+                self.logger.debug('send_message {} {}'.format(peer_id, msg))
+                try:
+                    data = {
+                        'peer': self.node_id,
+                        'msg': msg
+                    }
+                    url = "http://localhost:{}/msg".format(peer_id)
+                    
+                    postdata = json.dumps(data).encode()
+                    
+                    headers = {"Content-Type": "application/json; charset=UTF-8"}
+                    
+                    httprequest = Request(url, data=postdata, method="POST", headers=headers)
+
+                    with urlopen(httprequest) as response:
+                        response.read()
+                except Exception as e:
+                    self.logger.debug('Error sending message to peer {}: {}'.format(peer_id, e))
+            except queue.Empty:
+                pass
 
 
 if __name__ == '__main__':
     # Bring up a 5 node raft cluster with ports 8900-8904
     # Do it five times with multiple threads
-    nodes = []
+    # Read node to start from sys
+    port = sys.argv[1]
     node_ports = [str(i) for i in range(8900, 8905)]
-    logging.basicConfig(level=logging.INFO)
-    for port in node_ports:
-        logger = logging.getLogger('raft_{}'.format(port))
-        nodes.append(HttpRaft(port, node_ports, logger=logger, timeout=0.3, heartbeat=0.05))
-        nodes[-1].start_server()
+    logging.basicConfig(level=logging.DEBUG)
+    logger = logging.getLogger('raft_{}'.format(port))
+    node = HttpRaft(port, node_ports, logger=logger, timeout=10.0, heartbeat=1.0, client_timeout=5.0)
+    node.start_server()
