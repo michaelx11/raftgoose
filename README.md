@@ -39,6 +39,12 @@ Core Raft logic will live in a single abstract class. Subclasses must handle the
 
 This allows us to test the main logic without use of HTTP or other complications.
 
+## Current State
+
+Timings are not very tight (allow 0.8 seconds for leader election) but can be tuned later. Timings for MemoryRaft (the in memory version) are much tighter.
+
+In terms of correctness, there are almost certainly subtle bugs at this point. An exhaustive test suite is required. Do not use in production.
+
 ## How to Use
 
 If you have Python 3.7+, just run `raftgoose/http_raft.py`. The command will print out the ports addresses of the cluster nodes along with a ton of logs.
