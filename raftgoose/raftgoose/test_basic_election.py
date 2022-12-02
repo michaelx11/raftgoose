@@ -1,6 +1,7 @@
 from memory_test_harness import MemoryTestHarness
 
-class TestBasicElection():
+
+class TestBasicElection:
 
     last_leader = None
 
@@ -16,26 +17,32 @@ class TestBasicElection():
             # Make sure we don't get the same leader
             if self.last_leader is not None:
                 if self.last_leader == leaders[0].node_id:
-                    print('Got same leader as last time {}'.format(self.last_leader))
+                    print("Got same leader as last time {}".format(self.last_leader))
                     return False
             self.last_leader = leaders[0].node_id
             return True
 
-        return test_harness.run([
-            ('start', node_ids),
-            ('delay_ms', 500),
-            ('run_assert', assert_one_leader),
-            ('stop_leader', None),
-            ('delay_ms', 500),
-            ('run_assert', assert_one_leader),
-            ('stop', node_ids),
-        ])
+        return test_harness.run(
+            [
+                ("start", node_ids),
+                ("delay_ms", 500),
+                ("run_assert", assert_one_leader),
+                ("stop_leader", None),
+                ("delay_ms", 500),
+                ("run_assert", assert_one_leader),
+                ("stop", node_ids),
+            ]
+        )
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser()
     # Check for --verbose flag
-    parser.add_argument('-v', '--verbose', action='store_true')
+    parser.add_argument("-v", "--verbose", action="store_true")
     for i in range(100):
-        print('Test run {}'.format(i))
-        assert TestBasicElection().test_basic_election(quiet=not parser.parse_args().verbose)
+        print("Test run {}".format(i))
+        assert TestBasicElection().test_basic_election(
+            quiet=not parser.parse_args().verbose
+        )
