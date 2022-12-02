@@ -24,6 +24,10 @@ class TestElectionPartition():
         ])
 
 if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser()
+    # Check for --verbose flag
+    parser.add_argument('-v', '--verbose', action='store_true')
     for i in range(100):
         print('Test run: {}'.format(i))
-        assert TestElectionPartition().test_election_after_partition(quiet=False)
+        assert TestElectionPartition().test_election_after_partition(quiet=not parser.parse_args().verbose)

@@ -32,7 +32,10 @@ class TestBasicElection():
         ])
 
 if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser()
+    # Check for --verbose flag
+    parser.add_argument('-v', '--verbose', action='store_true')
     for i in range(100):
-        print('Running test {}'.format(i))
-        assert TestBasicElection().test_basic_election(quiet=False)
-
+        print('Test run {}'.format(i))
+        assert TestBasicElection().test_basic_election(quiet=not parser.parse_args().verbose)
