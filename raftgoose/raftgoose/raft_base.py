@@ -608,8 +608,8 @@ class RaftBase(ABC):
         Separated into a different thread because for memory-based network send_message might be effectively blocking
         '''
         while True:
-            # Wait for outbox flag
-            self.outbox_flag.wait()
+            # Wait for outbox flag, race condition unless you lock self.lock unfortunately so we have a timeout
+            self.outbox_flag.wait(timeout=0.050)
             if not self.running:
                 return
             messages = []
