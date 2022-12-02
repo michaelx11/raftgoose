@@ -58,12 +58,18 @@ class RaftBase(ABC):
         self.lock = threading.Lock()
         self.client_request_lock = threading.Lock()
 
-        self.election_timeout = 0.15 # 150ms
-        self.last_heartbeat = self.timer.time()
+        self.reset_election_timeout()
 
         # Threadsafe message inbox
         self.inbox = queue.Queue()
         self.outbox = queue.Queue()
+
+
+    def reset_election_timeout(self):
+        '''Reset the election timeout'''
+        self.election_timeout = self.timer.time() + random.uniform(0.15, 0.3)
+        self.logger.debug('Resetting election timeout to: {} from current {}'.format(self.election_timeout, self.timer.time()))
+        self.last_heartbeat = self.timer.time()
 
 
     # Abstract methods that subclasses must implement
@@ -184,8 +190,7 @@ class RaftBase(ABC):
             # Vote for the candidate
             self.db.set_voted_for(rpc['candidate_id'])
             # Reset election timeout
-            self.last_heartbeat = self.timer.time()
-            self.election_timeout = random.uniform(0.15, 0.3)
+            self.reset_election_timeout()
 
         # Once it goes into the outbox it's as good as done from this node's perspective
         self.outbox.put((peer, msg))
@@ -215,11 +220,10 @@ class RaftBase(ABC):
         # Check if we've won the election
         if sum(self.db.get_votes().values()) > len(self.peers) / 2:
             # We've won the election!
-            self.logger.debug('We won the election!')
+            self.logger.debug('We won the election at term: {}!'.format(self.db.get_term()))
             self.db.set_status('leader')
             # Reset the heartbeat timer
-            self.last_heartbeat = self.timer.time()
-            self.election_timeout = random.uniform(0.15, 0.3)
+            self.reset_election_timeout()
             # Reset the votes
             self.db.reset_votes()
             # Reset the next index for each peer and match index
@@ -290,13 +294,14 @@ class RaftBase(ABC):
         if success:
             for entry in rpc['entries']:
                 if entry['index'] > log_len - 1:
+                    self.logger.warning('Appending entry: {}'.format(entry))
                     self.db.append_log(entry)
             # Reset the election timeout
-            self.last_heartbeat = self.timer.time()
-            self.election_timeout = random.uniform(0.15, 0.3)
+            self.reset_election_timeout()
+
         # 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
         if rpc['leader_commit'] > self.db.get_commit_index():
-            self.db.set_commit_index(min(rpc['leader_commit'], self.db.get_log_length() - 1))
+            self.db.set_commit_index(min(rpc['leader_commit'], self.db.get_log()[-1]['index']))
 
         # Send a reply
         msg = {
@@ -431,7 +436,10 @@ class RaftBase(ABC):
                 # ========================
 
                 # The rest of the work is for network partitions and multiple leaders
-                # Append an empty entry to the log
+                self.logger.warning('Appending empty entry to log to test for leader')
+                # First prune local log to match commit index
+                self.db.set_log(self.db.get_log()[:self.db.get_commit_index() + 1])
+                # Append a check_leader entry to the log
                 self.db.append_log({'term': self.db.get_term(), 'index': self.db.get_log_length() + 1, 'command': 'check_leader'})
                 curr_log_length = self.db.get_log_length()
     
@@ -443,10 +451,11 @@ class RaftBase(ABC):
                 while True:
                     with wait_condition:
                         with self.lock:
-                            if self.db.get_commit_index() >= self.db.get_log_length() - 1:
+                            self.logger.warning('Comparing last applied index {} to log length {}'.format(self.db.get_last_applied(), self.db.get_log()))
+                            if self.db.get_last_applied() >= self.db.get_log_length():
                                 wait_condition.notify()
                                 return
-                    time.sleep(0.01)
+                    time.sleep(0.005)
                     if time.time() - start_time > 0.2:
                         return
             check_leader_thread = threading.Thread(target=_check_leader)
@@ -456,7 +465,7 @@ class RaftBase(ABC):
                 wait_condition.wait(0.25)
                 # Now we check if last entry is committed
                 with self.lock:
-                    if self.db.get_commit_index() >= self.db.get_log_length() - 1:
+                    if self.db.get_last_applied() >= self.db.get_log_length():
                         return True
                     return False
 
@@ -470,8 +479,7 @@ class RaftBase(ABC):
         # Set state to candidate
         self.db.set_status('candidate')
         # Reset last_heartbeat and election timeout
-        self.last_heartbeat = self.timer.time()
-        self.election_timeout = random.uniform(0.15, 0.3)
+        self.reset_election_timeout()
         # Vote for self
         self.db.reset_votes()
         self.db.set_voted_for(self.node_id)
@@ -503,7 +511,7 @@ class RaftBase(ABC):
 
             # Check for election timeout or need to heartbeat
             is_leader = self.db.get_status() == 'leader'
-            election_elapsed = self.timer.time() - self.last_heartbeat > self.election_timeout
+            election_elapsed = self.timer.time() > self.election_timeout
             if not is_leader and election_elapsed:
                 with self.lock:
                     self._start_election()
@@ -556,12 +564,11 @@ class RaftBase(ABC):
 
             # Send all messages in outbox, no need to lock here
             while not self.outbox.empty():
-                peer, message = self.outbox.get()
+                peer, message = self.outbox.get_nowait()
                 # Shouldn't need to check for outdated because protocol is robust
                 # to out of order messages (or should be)
                 self.send_message(peer, message)
 
             # Finally sleep until either next election timeout or next heartbeat if leader
-            next_heartbeat_delay = 0.03
-            sleep_time = min(self.election_timeout, next_heartbeat_delay)
-            time.sleep(sleep_time)
+            sleep_time = min(self.election_timeout - self.timer.time(), 0.02) if not is_leader else 0.02
+            time.sleep(max(0, sleep_time))
