@@ -34,10 +34,7 @@ class HttpRaft(RaftBase):
 
         def __init__(self, raft_node, is_control_server, *args, **kwargs):
             self.raft_node = raft_node
-            self.lock = threading.Lock()
             self.is_control_server = is_control_server
-            # Dropped peers
-            self.dropped_peers = defaultdict(lambda: False)
             super().__init__(*args, **kwargs)
 
         def log_message(self, format, *args):
@@ -52,30 +49,15 @@ class HttpRaft(RaftBase):
                     msg = self.rfile.read(length)
                     # Deserialize message as { peer: "string", msg: {}}
                     msg = json.loads(msg.decode('utf-8'))
-                    with self.lock:
-                        if self.dropped_peers[msg['peer']]:
+                    with self.raft_node.traffic_lock:
+                        if self.raft_node.dropped_peers[msg['peer']]:
                             # Drop message
                             self.send_response(400)
                             self.end_headers()
                             self.raft_node.logger.info('dropping message from %s', msg['peer'])
                             return
-                        self.raft_node.logger.info('http received message from %s: %s', msg['peer'], msg['msg'])
+                        self.raft_node.logger.debug('http received message from %s: %s', msg['peer'], msg['msg'])
                         self.raft_node.recv_message((msg['peer'], msg['msg']))
-                    self.send_response(200)
-                    self.end_headers()
-                    return
-                elif self.path == '/partition':
-                    # TODO: this is abstraction breaking since it's not control but
-                    # it's easier to do it here since there's a lock alreaday
-                    length = int(self.headers['Content-Length'])
-                    msg = self.rfile.read(length)
-                    msg = json.loads(msg.decode('utf-8'))
-                    with self.lock:
-                        # Drop all messages from peers in msg['peers']
-                        self.dropped_peers = defaultdict(lambda: False)
-                        for peer in msg['peers']:
-                            self.dropped_peers[peer] = True
-                            self.raft_node.logger.warning('dropping messages from %s', peer)
                     self.send_response(200)
                     self.end_headers()
                     return
@@ -94,6 +76,19 @@ class HttpRaft(RaftBase):
                 self.raft_node.logger.warning('node: %s started', self.raft_node.node_id)
                 self.send_response(200)
                 self.end_headers()
+            elif self.path == '/partition':
+                length = int(self.headers['Content-Length'])
+                msg = self.rfile.read(length)
+                msg = json.loads(msg.decode('utf-8'))
+                with self.raft_node.traffic_lock:
+                    # Drop all messages from peers in msg['peers']
+                    self.raft_node.dropped_peers = defaultdict(lambda: False)
+                    for peer in msg['peers']:
+                        self.raft_node.dropped_peers[peer] = True
+                        self.raft_node.logger.warning('dropping messages from %s', peer)
+                self.send_response(200)
+                self.end_headers()
+                return
             else:
                 self.send_response(404)
                 self.end_headers()
@@ -133,6 +128,10 @@ class HttpRaft(RaftBase):
         control_handler = partial(HttpRaft.HttpRaftHandler, self, True)
         # Add 1000 to port number to avoid conflict
         self.control_server = HTTPServer(('127.0.0.1', int(self.node_id) + 1000), control_handler)
+
+        # Stuff to manager dropped traffic
+        self.traffic_lock = threading.Lock()
+        self.dropped_peers = defaultdict(lambda: False)
 
     def start_server(self):
         self.server_thread = threading.Thread(target=self.server.serve_forever)

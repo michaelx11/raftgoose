@@ -7,6 +7,17 @@ Chosen: Use Raft, isLeader = (True if node thinks it is leader and can execute a
 
 Possible: Design a subset of Raft, but I think the probability of making some concurrency mistake in a custom protocol is too high.
 
+**Adding Removing Nodes**
+
+We just need to add a client request + state-machine transition for adding/removing peers one at a time. This is documented [by Eileen Pangu](https://eileen-code4fun.medium.com/raft-cluster-membership-change-protocol-f57cc17d1c03).
+
+It's important that we can only have one add/remove peer operation in flight at any time, it must reach quorum (aka return to client as success) before doing another. Otherwise there can be a split brain situation.
+
+**High Availability**
+
+Using the above technique, we can add or remove hardware from the pool at any time. For pure software upgrades, we can simply stop a node and then restart it.
+
+Note: current example implementation does not persist the database, but it's easy to imaged a version of MemoryDB that does JSON writes to a file on disk.
 
 ## References
 
@@ -91,3 +102,39 @@ stop
 ```
 
 ### Example Partition (hardcoded to 8900,8901 | 8902,8903,8904)
+
+Notice how after we stop the leader in 2,3,4 partition there cannot be a new goose because no quorum
+```
+(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+9900: goose
+9901: duck
+9902: duck
+9903: duck
+9904: duck
+(base) ➜  duckduckgoose git:(main) ✗ ./partition.sh
+(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+9900: duck
+9901: duck
+9902: duck
+9903: duck
+9904: goose
+(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+9900: duck
+9901: duck
+9902: duck
+9903: duck
+9904: goose
+(base) ➜  duckduckgoose git:(main) ✗ bash startstop.sh 9904 stop
+stop
+(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+9900: duck
+9901: duck
+9902: duck
+9903: duck
+9904: duck
+(base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
+9900: duck
+9901: duck
+9902: duck
+9903: duck
+```
