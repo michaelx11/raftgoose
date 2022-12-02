@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 class RaftBase(ABC):
     '''A basic Raft implementation which accesses everything through expected methods for abstraction'''
 
-    def __init__(self, node_id, peers, db, timer=None, logger=None, timeout=0.15, heartbeat=0.03):
+    def __init__(self, node_id, peers, db, timer=None, logger=None, timeout=0.20, heartbeat=0.04):
         '''Initialize the RaftBase object
         
         Inject the timer to allow for easier testing
@@ -93,9 +93,9 @@ class RaftBase(ABC):
         NOTE: must be locked
         '''
         self.logger.debug('Stepping down')
-        self.db.set_term(rpc['term'])
         self.db.set_status('follower')
         self.db.set_voted_for(None)
+        self.db.set_term(rpc['term'])
 
         # Reset next indexes and match indexes
         self.db.set_next_indexes_bulk({peer: 0 for peer in self.peers})
@@ -284,7 +284,9 @@ class RaftBase(ABC):
         # Or if we're a candidate and we see an append_entry from a leader with the right term
         if self.db.get_status() == 'candidate' and rpc['term'] == self.db.get_term():
             self._step_down(rpc)
+
         success = True
+        current_leader = True
 
         curr_log = self.db.get_log()
         curr_term = self.db.get_term()
@@ -292,6 +294,7 @@ class RaftBase(ABC):
         # 1. Reply false if term < currentTerm
         if rpc['term'] < curr_term:
             success = False
+            current_leader = False
 
         # If curr_log is empty we take anything (scientific terms)
         log_len = self.db.get_log_length()
@@ -306,14 +309,17 @@ class RaftBase(ABC):
                 self.db.set_log(curr_log[1:rpc['prev_log_index']])
                 curr_log = self.db.get_log()
 
+        if current_leader:
+            # Reset the election timeout if the message is from the current leader
+            self.reset_election_timeout()
+
         # 4. Append any new entries not already in the log
         if success:
             for entry in rpc['entries']:
-                if entry['index'] > log_len - 1:
+                if entry['index'] > self.db.get_log_length() - 1:
+                    self.logger.debug('Appending entry from msg: {}'.format(rpc))
                     self.logger.debug('Appending entry: {}'.format(entry))
                     self.db.append_log(entry)
-            # Reset the election timeout
-            self.reset_election_timeout()
 
         # 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
         if rpc['leader_commit'] > self.db.get_commit_index():
@@ -345,11 +351,22 @@ class RaftBase(ABC):
         if len(match_index) > 0:
             # Compute majority, -1 because if even (4 -> 2 - 1 = index 1) if odd (3 -> 1 - 1 = index 0)
             majority = match_index[len(match_index) // 2 - 1]
+            self.logger.debug('match index: {}'.format(match_index))
+            self.logger.debug('Majority match index: {}, current commit index: {} and log: {}'.format(
+                majority, self.db.get_commit_index(), self.db.get_log()))
             if majority > self.db.get_commit_index() and self.db.get_log()[majority]['term'] == self.db.get_term():
                 self.logger.info('Majority match index is {}'.format(majority))
                 # Set commit index to majority
                 self.logger.info('Committing index {}'.format(majority))
                 self.db.set_commit_index(majority)
+                # Apply immediately
+                # Check if commit index > last_applied
+                if self.db.get_commit_index() > self.db.get_last_applied():
+                    # Increment last_applied
+                    self.db.set_last_applied(self.db.get_commit_index())
+                    # TODO: here we would apply the log entry to the state machine
+                    # but in practice the only thing that would change would be the peer list
+                    # TODO: update peer list with add/remove operation
 
     def _process_append_entry_reply(self, peer, rpc):
         '''Process an append entry reply 
@@ -387,13 +404,17 @@ class RaftBase(ABC):
             # Send an append_entry to the peer
             curr_log = self.db.get_log()
             prev_log_index = max(0, self.db.get_next_index(peer) - 1)
+            entries = curr_log[prev_log_index + 1:]
+            self.logger.debug('Sending append_entry to {} with prev_log_index: {}, prev_log_term: {}, entries: {}, leader_commit: {}'.format(
+                peer, prev_log_index, curr_log[prev_log_index]['term'], entries, self.db.get_commit_index()))
+            assert prev_log_index + len(entries) == self.db.get_log_length()
             msg = {
                 'type': 'append_entry',
                 'term': self.db.get_term(),
                 'leader_id': self.node_id,
                 'prev_log_index': prev_log_index,
                 'prev_log_term': curr_log[prev_log_index]['term'],
-                'entries': curr_log[self.db.get_next_index(peer):],
+                'entries': entries,
                 'leader_commit': self.db.get_commit_index(),
             }
             self.queue_outbox((peer, msg))
@@ -451,6 +472,8 @@ class RaftBase(ABC):
                     self.db.set_log(self.db.get_log()[1:self.db.get_commit_index() + 1])
                     # Append a check_leader entry to the log
                     self.db.append_log({'term': self.db.get_term(), 'index': self.db.get_log_length() + 1, 'command': 'check_leader'})
+                    self.logger.debug('latest log is now {}'.format(self.db.get_log()[-1]))
+
             def check_leader():
                 # Now create a wait condition for commit of the entry, and spin a separate thread to check it every 10ms
                 # after 250ms we give up and return False
@@ -461,10 +484,15 @@ class RaftBase(ABC):
                         if self.db.get_last_applied() >= self.db.get_log_length():
                             self.logger.info('Leader check succeeded')
                             return
-                    time.sleep(0.015)
+                    time.sleep(0.080)
                     if time.time() - start_time > 0.250:
                         self.logger.info('Leader check timed out')
                         return
+
+            with self.lock:
+                # if not leader bail immediately
+                if self.db.get_status() != 'leader':
+                    return False
             # Start process_client_request thread and join it before starting wait thread
             process_client_request_thread = threading.Thread(target=process_client_request)
             process_client_request_thread.start()
@@ -521,19 +549,11 @@ class RaftBase(ABC):
                 return
 
             # Check for election timeout or need to heartbeat
-            is_leader = self.db.get_status() == 'leader'
-            election_elapsed = self.timer.time() > self.election_timeout
-            if not is_leader and election_elapsed:
-                with self.lock:
+            with self.lock:
+                is_leader = self.db.get_status() == 'leader'
+                election_elapsed = self.timer.time() > self.election_timeout
+                if not is_leader and election_elapsed:
                     self._start_election()
-
-            # Check if commit index > last_applied
-            if self.db.get_commit_index() > self.db.get_last_applied():
-                # Increment last_applied
-                self.db.set_last_applied(self.db.get_last_applied() + 1)
-                # TODO: here we would apply the log entry to the state machine
-                # but in practice the only thing that would change would be the peer list
-                # TODO: update peer list with add/remove operation
 
             # Pull all messages from inbox non-blocking until empty (non-blocking)
             with self.lock:
@@ -542,9 +562,9 @@ class RaftBase(ABC):
                 self.inbox.clear()
 
             # If you're the leader, send some heartbeat messages ONLY IF LEADER
-            if is_leader:
-                # Send heartbeat
-                with self.lock:
+            # Send heartbeat
+            with self.lock:
+                if self.db.get_status() == 'leader':
                     # Tricky bit, need to do some bookkeeping logic from paper
                     # ========================================================
                     # Either send a heartbeat if nextIndex is <= log length or send an actual set of entries
@@ -555,19 +575,25 @@ class RaftBase(ABC):
                     for peer, next_index in self.db.get_next_indexes_bulk().items():
                         if peer == self.node_id:
                             # Just update the next index to be the log length+1
+                            self.logger.debug('Updating next index for self {} to {}'.format(peer, self.db.get_log_length() + 1))
                             self.db.set_next_index(self.node_id, self.db.get_log_length()+1)
                             self.db.set_match_index(self.node_id, self.db.get_log_length())
                             continue
                         curr_log = self.db.get_log()
                         # Send append_entry RPC, but will effectively be a heartbeat
                         next_index = max(1, next_index)
+                        # If next_index is 2, then we send [sentinal, 1,(now start) 2] or [2:]
+                        entries = curr_log[next_index:]
+                        # Log next_index, entries and log length
+                        self.logger.debug('IMPORTANT: next_index is {} and entries is {} and log length is {}'.format(next_index, entries, self.db.get_log_length()))
+                        assert next_index - 1 + len(entries) == self.db.get_log_length()
                         message = {
                             'type': 'append_entry',
                             'term': self.db.get_term(),
                             'leader_id': self.node_id,
                             'prev_log_index': next_index - 1,
                             'prev_log_term': curr_log[next_index - 1]['term'] if next_index > 1 else 0,
-                            'entries': curr_log[next_index:],
+                            'entries': entries,
                             'leader_commit': self.db.get_commit_index(),
                         }
                         self.queue_outbox((peer, message))
