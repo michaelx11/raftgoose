@@ -287,7 +287,7 @@ class RaftBase(ABC):
             if rpc['prev_log_index'] <= log_len - 1 and curr_log[rpc['prev_log_index']]['term'] != rpc['prev_log_term']:
                 success = False
                 # Need to delete all entries after prev_log_index
-                self.db.set_log(curr_log[:rpc['prev_log_index']])
+                self.db.set_log(curr_log[1:rpc['prev_log_index']])
                 curr_log = self.db.get_log()
 
         # 4. Append any new entries not already in the log
@@ -332,6 +332,7 @@ class RaftBase(ABC):
             if majority > self.db.get_commit_index() and self.db.get_log()[majority]['term'] == self.db.get_term():
                 self.logger.debug('Majority match index is {}'.format(majority))
                 # Set commit index to majority
+                self.logger.warning('Committing index {}'.format(majority))
                 self.db.set_commit_index(majority)
 
     def _process_append_entry_reply(self, peer, rpc):
@@ -361,6 +362,7 @@ class RaftBase(ABC):
             # Update nextIndex and matchIndex for follower
             self.db.set_next_index(peer, rpc['original_rpc']['prev_log_index'] + len(rpc['original_rpc']['entries']) + 1)
             self.db.set_match_index(peer, rpc['original_rpc']['prev_log_index'] + len(rpc['original_rpc']['entries']))
+            self.logger.debug('Updating nextIndex and matchIndex for follower {} to {} and {}'.format(peer, rpc['original_rpc']['prev_log_index'] + len(rpc['original_rpc']['entries']) + 1, rpc['original_rpc']['prev_log_index'] + len(rpc['original_rpc']['entries'])))
             # Check if we can commit any new entries
             self._check_commit()
         else:
@@ -387,21 +389,6 @@ class RaftBase(ABC):
             self.running = True
         self.internal_loop_thread = threading.Thread(target=self._internal_loop)
         self.internal_loop_thread.start()
-
-
-    def _send_heartbeats(self):
-        '''Send empty append_entry RPCs to all peers'''
-        msg = {
-            'type': 'append_entry',
-            'term': self.db.get_term(),
-            'leader_id': self.node_id,
-            'prev_log_index': 0,
-            'prev_log_term': 0,
-            'entries': [],
-            'leader_commit': self.db.get_commit_index(),
-        }
-        for t_peer in self.peers:
-            self.outbox.put((t_peer, msg))
 
 
     def stop(self):
@@ -438,7 +425,7 @@ class RaftBase(ABC):
                 # The rest of the work is for network partitions and multiple leaders
                 self.logger.warning('Appending empty entry to log to test for leader')
                 # First prune local log to match commit index
-                self.db.set_log(self.db.get_log()[:self.db.get_commit_index() + 1])
+                self.db.set_log(self.db.get_log()[1:self.db.get_commit_index() + 1])
                 # Append a check_leader entry to the log
                 self.db.append_log({'term': self.db.get_term(), 'index': self.db.get_log_length() + 1, 'command': 'check_leader'})
                 curr_log_length = self.db.get_log_length()
@@ -466,7 +453,9 @@ class RaftBase(ABC):
                 # Now we check if last entry is committed
                 with self.lock:
                     if self.db.get_last_applied() >= self.db.get_log_length():
+                        self.logger.warning('Leader check successful')
                         return True
+                    self.logger.warning('Leader check failed')
                     return False
 
     def _start_election(self):
@@ -540,27 +529,32 @@ class RaftBase(ABC):
             if is_leader:
                 # Send heartbeat
                 with self.lock:
-                    self._send_heartbeats()
                     # Tricky bit, need to do some bookkeeping logic from paper
                     # ========================================================
+                    # Either send a heartbeat if nextIndex is <= log length or send an actual set of entries
                     # If last log index ≥ nextIndex for a follower: send AppendEntries RPC with log entries starting at nextIndex
                     # ========================================================
 
                     # Check all next_index values against last log index
                     for peer, next_index in self.db.get_next_indexes_bulk().items():
+                        if peer == self.node_id:
+                            # Just update the next index to be the log length+1
+                            self.db.set_next_index(self.node_id, self.db.get_log_length()+1)
+                            self.db.set_match_index(self.node_id, self.db.get_log_length())
+                            continue
                         curr_log = self.db.get_log()
-                        if next_index <= self.db.get_log_length():
-                            # Send append_entry RPC
-                            message = {
-                                'type': 'append_entry',
-                                'term': self.db.get_term(),
-                                'leader_id': self.node_id,
-                                'prev_log_index': next_index - 1,
-                                'prev_log_term': curr_log[next_index - 1]['term'] if next_index > 0 else 0,
-                                'entries': curr_log[next_index:],
-                                'leader_commit': self.db.get_commit_index(),
-                            }
-                            self.outbox.put((peer, message))
+                        # Send append_entry RPC, but will effectively be a heartbeat
+                        next_index = max(1, next_index)
+                        message = {
+                            'type': 'append_entry',
+                            'term': self.db.get_term(),
+                            'leader_id': self.node_id,
+                            'prev_log_index': next_index - 1,
+                            'prev_log_term': curr_log[next_index - 1]['term'] if next_index > 0 else 0,
+                            'entries': curr_log[next_index:],
+                            'leader_commit': self.db.get_commit_index(),
+                        }
+                        self.outbox.put((peer, message))
 
             # Send all messages in outbox, no need to lock here
             while not self.outbox.empty():
