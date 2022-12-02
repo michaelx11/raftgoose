@@ -40,7 +40,6 @@ class MemoryTestHarness:
                         if nodes.pub_is_leader():
                             self.logger.info('Stopping leader: %s', nodes.node_id)
                             nodes.stop()
-                            break
                 elif cmd[0] == 'delay_ms':
                     time.sleep(cmd[1] / 1000)
                 elif cmd[0] == 'partition':

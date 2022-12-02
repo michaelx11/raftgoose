@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 class RaftBase(ABC):
     '''A basic Raft implementation which accesses everything through expected methods for abstraction'''
 
-    def __init__(self, node_id, peers, db, timer=None, logger=None, timeout=0.20, heartbeat=0.04):
+    def __init__(self, node_id, peers, db, timer=None, logger=None, timeout=0.20, heartbeat=0.04, client_timeout=0.25):
         '''Initialize the RaftBase object
         
         Inject the timer to allow for easier testing
@@ -21,6 +21,7 @@ class RaftBase(ABC):
         self.db = db
         self.timeout = timeout
         self.heartbeat = heartbeat
+        self.client_timeout = client_timeout
 
         self.running = True
 
@@ -484,8 +485,8 @@ class RaftBase(ABC):
                         if self.db.get_last_applied() >= self.db.get_log_length():
                             self.logger.info('Leader check succeeded')
                             return
-                    time.sleep(0.080)
-                    if time.time() - start_time > 0.250:
+                    time.sleep(self.client_timeout / 20.0)
+                    if time.time() - start_time > self.client_timeout:
                         self.logger.info('Leader check timed out')
                         return
 
