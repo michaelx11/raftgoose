@@ -468,7 +468,7 @@ class RaftBase(ABC):
                     # ========================
 
                     # The rest of the work is for network partitions and multiple leaders
-                    self.logger.info('Appending empty entry to log to test for leader')
+                    self.logger.debug('Appending empty entry to log to test for leader')
                     # First prune local log to match commit index
                     self.db.set_log(self.db.get_log()[1:self.db.get_commit_index() + 1])
                     # Append a check_leader entry to the log
@@ -481,7 +481,7 @@ class RaftBase(ABC):
                 start_time = time.time()
                 while True:
                     with self.lock:
-                        self.logger.info('Comparing last applied index {} to log length {}'.format(self.db.get_last_applied(), self.db.get_log()))
+                        self.logger.debug('Comparing last applied index {} to log length {}'.format(self.db.get_last_applied(), self.db.get_log()))
                         if self.db.get_last_applied() >= self.db.get_log_length():
                             self.logger.info('Leader check succeeded')
                             return

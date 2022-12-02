@@ -45,6 +45,12 @@ If you have Python 3.7+, just run `raftgoose/http_raft.py`. The command will pri
 
 You can use scripts to interact with the system, for example choosing network partitions or pausing/killing/restarting nodes.
 
+### Testing
+
+Run `python raftgoose/test_basic_election.py` or `python raftgoose/test_election_partition.py` to start a 100-run version of each test.
+
+These tests were used extensively in development, you can make them more verbose by editing the `quiet=True` flag to false in either test.
+
 ### Example Interaction
 ```
 (base) ➜  duckduckgoose git:(main) ✗ bash find_goose.sh
