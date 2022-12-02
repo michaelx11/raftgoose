@@ -31,7 +31,11 @@ class RaftBase(ABC):
         if logger is None:
             self.logger = logging.getLogger('raft {}'.format(self.node_id))
         else:
-            self.logger = logger
+            # Create a new logger wrapping old logger with node id
+            class CustomAdapter(logging.LoggerAdapter):
+                def process(self, msg, kwargs):
+                    return '[node {}] {}'.format(self.extra['node_id'], msg), kwargs
+            self.logger = CustomAdapter(logger, {'node_id': self.node_id})
 
         # Try to load existing persistent state
         if not self.db.load_persistent():
@@ -83,6 +87,10 @@ class RaftBase(ABC):
         self.db.set_term(rpc['term'])
         self.db.set_status('follower')
         self.db.set_voted_for(None)
+
+        # Reset next indexes and match indexes
+        self.db.set_next_indexes_bulk({peer: 0 for peer in self.peers})
+        self.db.set_match_indexes_bulk({peer: 0 for peer in self.peers})
         # NOTE: don't think we need to respond to this
         return
 
@@ -449,13 +457,8 @@ class RaftBase(ABC):
                 # Now we check if last entry is committed
                 with self.lock:
                     if self.db.get_commit_index() >= self.db.get_log_length() - 1:
-                        # Remove the entry from the log
-                        self.db.set_log(self.db.get_log()[:curr_log_length - 1])
                         return True
-                    else:
-                        # Remove the entry from the log
-                        self.db.set_log(self.db.get_log()[:curr_log_length - 1])
-                        return False
+                    return False
 
     def _start_election(self):
         '''Start an election process. Only side-effects are to set state and increment term

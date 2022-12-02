@@ -21,6 +21,7 @@ class MemoryTestHarness:
         '''Handle test commands like:
         - (start, [node_ids])
         - (stop, [node_ids])
+        - (stop_leader, None)
         - (delay_ms, ms)
         - (partition, [node_ids], [node_ids])
         - (clear_partition, None)
@@ -34,6 +35,12 @@ class MemoryTestHarness:
                 elif cmd[0] == 'stop':
                     for node_id in cmd[1]:
                         self.nodes[node_id].stop()
+                elif cmd[0] == 'stop_leader':
+                    for nodes in self.nodes.values():
+                        if nodes.pub_is_leader():
+                            self.logger.warning('Stopping leader: %s', nodes.node_id)
+                            nodes.stop()
+                            break
                 elif cmd[0] == 'delay_ms':
                     time.sleep(cmd[1] / 1000)
                 elif cmd[0] == 'partition':

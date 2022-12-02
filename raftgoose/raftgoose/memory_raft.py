@@ -64,7 +64,7 @@ class MemoryRaft(RaftBase):
             return self.db
 
     def __init__(self, node_id, peers, messagehub, timer=None, logger=None):
-        super().__init__(node_id, peers, MemoryRaft.MemoryDb(), timer=None, logger=None)
+        super().__init__(node_id, peers, MemoryRaft.MemoryDb(), timer=timer, logger=logger)
         self.db = self.MemoryDb()
         self.messagehub = messagehub
         self.messagehub.register(node_id, self)
