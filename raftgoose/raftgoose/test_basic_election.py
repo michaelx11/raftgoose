@@ -25,14 +25,14 @@ class TestBasicElection():
             ('start', node_ids),
             ('delay_ms', 500),
             ('run_assert', assert_one_leader),
-            ('stop_leader', None),
-            ('delay_ms', 500),
-            ('run_assert', assert_one_leader),
-            ('stop', node_ids),
+#            ('stop_leader', None),
+#            ('delay_ms', 500),
+#            ('run_assert', assert_one_leader),
+#            ('stop', node_ids),
         ])
 
 if __name__ == '__main__':
-    for i in range(1):
+    for i in range(10):
         print('Running test {}'.format(i))
-        TestBasicElection().test_basic_election(quiet=False)
+        TestBasicElection().test_basic_election(quiet=True)
 
