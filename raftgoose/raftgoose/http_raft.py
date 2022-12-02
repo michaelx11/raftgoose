@@ -98,8 +98,8 @@ class HttpRaft(RaftBase):
                 self.send_response(404)
                 self.end_headers()
 
-    def __init__(self, node_id, peers, timer=None, logger=None):
-        super().__init__(node_id, peers, HttpRaft.MemoryDb(), timer=timer, logger=logger)
+    def __init__(self, node_id, peers, **kwargs):
+        super().__init__(node_id, peers, HttpRaft.MemoryDb(), **kwargs)
         self.db = self.MemoryDb()
         handler = partial(HttpRaft.HttpRaftHandler, self)
         self.server = HTTPServer(('127.0.0.1', int(self.node_id)), handler)
@@ -143,5 +143,5 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     for port in node_ports:
         logger = logging.getLogger('raft_{}'.format(port))
-        nodes.append(HttpRaft(port, node_ports, logger=logger))
+        nodes.append(HttpRaft(port, node_ports, logger=logger, timeout=0.3, heartbeat=0.05))
         nodes[-1].start_server()

@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 class RaftBase(ABC):
     '''A basic Raft implementation which accesses everything through expected methods for abstraction'''
 
-    def __init__(self, node_id, peers, db, timer=None, logger=None):
+    def __init__(self, node_id, peers, db, timer=None, logger=None, timeout=0.15, heartbeat=0.02):
         '''Initialize the RaftBase object
         
         Inject the timer to allow for easier testing
@@ -19,6 +19,8 @@ class RaftBase(ABC):
         self.node_id = node_id
         self.peers = peers
         self.db = db
+        self.timeout = timeout
+        self.heartbeat = heartbeat
 
         self.running = True
 
@@ -67,7 +69,7 @@ class RaftBase(ABC):
 
     def reset_election_timeout(self):
         '''Reset the election timeout'''
-        self.election_timeout = self.timer.time() + random.uniform(0.15, 0.3)
+        self.election_timeout = self.timer.time() + random.uniform(self.timeout, 2 * self.timeout)
         self.logger.debug('Resetting election timeout to: {} from current {}'.format(self.election_timeout, self.timer.time()))
         self.last_heartbeat = self.timer.time()
 
@@ -331,9 +333,9 @@ class RaftBase(ABC):
             # Compute majority
             majority = match_index[len(match_index) // 2]
             if majority > self.db.get_commit_index() and self.db.get_log()[majority]['term'] == self.db.get_term():
-                self.logger.debug('Majority match index is {}'.format(majority))
+                self.logger.info('Majority match index is {}'.format(majority))
                 # Set commit index to majority
-                self.logger.debug('Committing index {}'.format(majority))
+                self.logger.info('Committing index {}'.format(majority))
                 self.db.set_commit_index(majority)
 
     def _process_append_entry_reply(self, peer, rpc):
@@ -444,7 +446,7 @@ class RaftBase(ABC):
                                 wait_condition.notify()
                                 return
                     time.sleep(0.005)
-                    if time.time() - start_time > 0.2:
+                    if time.time() - start_time > 0.250:
                         return
             check_leader_thread = threading.Thread(target=_check_leader)
             check_leader_thread.start()
@@ -566,5 +568,5 @@ class RaftBase(ABC):
                 self.send_message(peer, message)
 
             # Finally sleep until either next election timeout or next heartbeat if leader
-            sleep_time = min(self.election_timeout - self.timer.time(), 0.02) if not is_leader else 0.02
+            sleep_time = min(self.election_timeout - self.timer.time(), self.heartbeat) if not is_leader else self.heartbeat
             time.sleep(max(0, sleep_time))
