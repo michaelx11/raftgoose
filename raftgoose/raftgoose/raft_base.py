@@ -316,7 +316,7 @@ class RaftBase(ABC):
         # 4. Append any new entries not already in the log
         if success:
             for entry in rpc['entries']:
-                if entry['index'] > self.db.get_log_length() - 1:
+                if entry['index'] > self.db.get_log_length():
                     self.logger.debug('Appending entry from msg: {}'.format(rpc))
                     self.logger.debug('Appending entry: {}'.format(entry))
                     self.db.append_log(entry)
@@ -349,8 +349,8 @@ class RaftBase(ABC):
         match_index = self.db.get_match_indexes_bulk()
         match_index = sorted(match_index.values())
         if len(match_index) > 0:
-            # Compute majority, -1 because if even (4 -> 2 - 1 = index 1) if odd (3 -> 1 - 1 = index 0)
-            majority = match_index[len(match_index) // 2 - 1]
+            # Compute majority because if even (4 -> 2 = index 2 in sorted out of 5) if odd (3 -> 1 = index 0)
+            majority = match_index[len(match_index) // 2]
             self.logger.debug('match index: {}'.format(match_index))
             self.logger.debug('Majority match index: {}, current commit index: {} and log: {}'.format(
                 majority, self.db.get_commit_index(), self.db.get_log()))
