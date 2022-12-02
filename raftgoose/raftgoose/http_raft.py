@@ -169,8 +169,7 @@ class HttpRaft(RaftBase):
 
 if __name__ == '__main__':
     # Bring up a 5 node raft cluster with ports 8900-8904
-    # Control servers are 8900-8904, raft communiation happens on 9900-9904
-    # Do it five times with multiple threads
+    # Raft communication servers are 8900-8904, control servers are 9900-9904
     nodes = []
     node_ports = [str(i) for i in range(8900, 8905)]
     logging.basicConfig(level=logging.INFO)
