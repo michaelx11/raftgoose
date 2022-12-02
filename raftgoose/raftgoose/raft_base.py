@@ -3,8 +3,8 @@ import random
 import logging
 
 import threading
-import queue
 import select
+from collections import deque
 
 from abc import ABC, abstractmethod
 
@@ -62,9 +62,9 @@ class RaftBase(ABC):
 
         self.reset_election_timeout()
 
-        # Threadsafe message inbox
-        self.inbox = queue.Queue()
-        self.outbox = queue.Queue()
+        # message inboxes (must be locked, tried queue.Queue but behavior was strange)
+        self.inbox = deque()
+        self.outbox = deque()
 
 
     def reset_election_timeout(self):
@@ -148,7 +148,8 @@ class RaftBase(ABC):
     def recv_message(self, message):
         '''Receive a message from a peer'''
         self.logger.debug('Received message: {}'.format(message))
-        self.inbox.put(message)
+        with self.lock:
+            self.inbox.append(message)
 
 
     def _process_request_vote(self, peer, rpc):
@@ -196,7 +197,7 @@ class RaftBase(ABC):
             self.reset_election_timeout()
 
         # Once it goes into the outbox it's as good as done from this node's perspective
-        self.outbox.put((peer, msg))
+        self.outbox.append((peer, msg))
 
 
     def _process_request_vote_reply(self, peer, rpc):
@@ -245,7 +246,7 @@ class RaftBase(ABC):
                 'leader_commit': self.db.get_commit_index(),
             }
             for t_peer in self.peers:
-                self.outbox.put((t_peer, msg))
+                self.outbox.append((t_peer, msg))
 
 
     def _process_append_entry(self, peer, rpc):
@@ -314,7 +315,7 @@ class RaftBase(ABC):
             'node_id': self.node_id,
             'original_rpc': rpc
         }
-        self.outbox.put((peer, msg))
+        self.outbox.append((peer, msg))
 
 
     def _check_commit(self):
@@ -383,15 +384,18 @@ class RaftBase(ABC):
                 'entries': curr_log[self.db.get_next_index(peer):],
                 'leader_commit': self.db.get_commit_index(),
             }
-            self.outbox.put((peer, msg))
+            self.outbox.append((peer, msg))
 
 
     def start(self):
         '''Start the internal loop'''
         with self.lock:
             self.running = True
+        self.logger.info('Starting internal loop')
         self.internal_loop_thread = threading.Thread(target=self._internal_loop)
         self.internal_loop_thread.start()
+        self.outbox_thread = threading.Thread(target=self._outbox_loop)
+        self.outbox_thread.start()
 
 
     def stop(self):
@@ -411,55 +415,54 @@ class RaftBase(ABC):
         So we need to send an append_entry RPC to all peers and see if we get a majority of replies.
         At which point we return True.
         '''
-        # need to acquire a global client request lock
+        # need to acquire a global client request lock to prevent concurrent requests for simplicity
         with self.client_request_lock:
-            curr_log_length = 0
-            with self.lock:
-                # If status is not leader return False immediately
-                if self.db.get_status() != 'leader':
-                    return False
-                # NOTE: Uncomment below to break leader election
-                # this will return multiple leaders and the event of network partition
-                # ========================
-                # else:
-                #     return True
-                # ========================
+            # Run two threads
+            def process_client_request():
+                '''Send a client request to all peers and wait for a majority of replies'''
+                with self.lock:
+                    # If status is not leader return False immediately
+                    if self.db.get_status() != 'leader':
+                        return False
+                    # NOTE: Uncomment below to break leader election
+                    # this will return multiple leaders and the event of network partition
+                    # ========================
+                    # else:
+                    #     return True
+                    # ========================
 
-                # The rest of the work is for network partitions and multiple leaders
-                self.logger.info('Appending empty entry to log to test for leader')
-                # First prune local log to match commit index
-                self.db.set_log(self.db.get_log()[1:self.db.get_commit_index() + 1])
-                # Append a check_leader entry to the log
-                self.db.append_log({'term': self.db.get_term(), 'index': self.db.get_log_length() + 1, 'command': 'check_leader'})
-                curr_log_length = self.db.get_log_length()
-    
-            # Now create a wait condition for commit of the entry, and spin a separate thread to check it every 10ms
-            # after 250ms we give up and return False
-            wait_condition = threading.Condition()
-            def _check_leader():
+                    # The rest of the work is for network partitions and multiple leaders
+                    self.logger.info('Appending empty entry to log to test for leader')
+                    # First prune local log to match commit index
+                    self.db.set_log(self.db.get_log()[1:self.db.get_commit_index() + 1])
+                    # Append a check_leader entry to the log
+                    self.db.append_log({'term': self.db.get_term(), 'index': self.db.get_log_length() + 1, 'command': 'check_leader'})
+            def check_leader():
+                # Now create a wait condition for commit of the entry, and spin a separate thread to check it every 10ms
+                # after 250ms we give up and return False
                 start_time = time.time()
                 while True:
-                    with wait_condition:
-                        with self.lock:
-                            self.logger.info('Comparing last applied index {} to log length {}'.format(self.db.get_last_applied(), self.db.get_log()))
-                            if self.db.get_last_applied() >= self.db.get_log_length():
-                                wait_condition.notify()
-                                return
-                    time.sleep(0.005)
+                    with self.lock:
+                        self.logger.info('Comparing last applied index {} to log length {}'.format(self.db.get_last_applied(), self.db.get_log()))
+                        if self.db.get_last_applied() >= self.db.get_log_length():
+                            self.logger.info('Leader check succeeded')
+                            return
+                    time.sleep(0.015)
                     if time.time() - start_time > 0.250:
+                        self.logger.info('Leader check timed out')
                         return
-            check_leader_thread = threading.Thread(target=_check_leader)
+            # Start process_client_request thread and join it before starting wait thread
+            process_client_request_thread = threading.Thread(target=process_client_request)
+            process_client_request_thread.start()
+            process_client_request_thread.join()
+            # Now start the wait thread and join it
+            check_leader_thread = threading.Thread(target=check_leader)
             check_leader_thread.start()
-            # Now wait for the condition to be notified for 250ms
-            with wait_condition:
-                wait_condition.wait(0.25)
-                # Now we check if last entry is committed
-                with self.lock:
-                    if self.db.get_last_applied() >= self.db.get_log_length():
-                        self.logger.info('Leader check successful')
-                        return True
-                    self.logger.info('Leader check failed')
-                    return False
+            check_leader_thread.join()
+            # Now check if we have a majority of replies
+            with self.lock:
+                return self.db.get_status() == 'leader' and self.db.get_last_applied() >= self.db.get_log_length()
+
 
     def _start_election(self):
         '''Start an election process. Only side-effects are to set state and increment term
@@ -485,8 +488,9 @@ class RaftBase(ABC):
             'last_log_index': max(0, len(curr_log) - 1),
             'last_log_term': curr_log[len(curr_log) - 1]['term'] if self.db.get_log_length() > 0 else 0,
         }
+        # Already locked
         for peer in self.peers:
-            self.outbox.put((peer, message))
+            self.outbox.append((peer, message))
 
     def _internal_loop(self):
         '''This is an internal maintenance loop, for election timeouts etc
@@ -518,16 +522,10 @@ class RaftBase(ABC):
                 # TODO: update peer list with add/remove operation
 
             # Pull all messages from inbox non-blocking until empty (non-blocking)
-            limit = 10
-            while not self.inbox.empty() and limit > 0:
-                try:
-                    peer, rpc = self.inbox.get_nowait()
-                    # Only need to lock processing cause queue is thread-safe
-                    with self.lock:
-                        self._process_rpc(peer, rpc)
-                    limit -= 1
-                except queue.Empty:
-                    break
+            with self.lock:
+                for peer, rpc in self.inbox:
+                    self._process_rpc(peer, rpc)
+                self.inbox.clear()
 
             # If you're the leader, send some heartbeat messages ONLY IF LEADER
             if is_leader:
@@ -558,15 +556,28 @@ class RaftBase(ABC):
                             'entries': curr_log[next_index:],
                             'leader_commit': self.db.get_commit_index(),
                         }
-                        self.outbox.put((peer, message))
-
-            # Send all messages in outbox, no need to lock here
-            while not self.outbox.empty():
-                peer, message = self.outbox.get_nowait()
-                # Shouldn't need to check for outdated because protocol is robust
-                # to out of order messages (or should be)
-                self.send_message(peer, message)
+                        self.outbox.append((peer, message))
 
             # Finally sleep until either next election timeout or next heartbeat if leader
             sleep_time = min(self.election_timeout - self.timer.time(), self.heartbeat) if not is_leader else self.heartbeat
             time.sleep(max(0, sleep_time))
+
+    def _outbox_loop(self):
+        '''This is a loop that just sends messages in the outbox
+
+        Separated into a different thread because for memory-based network send_message might be effectively blocking
+        '''
+        while True:
+            if not self.running:
+                return
+            messages = []
+            try:
+                self.lock.acquire()
+                messages = self.outbox.copy()
+                self.outbox.clear()
+            finally:
+                self.lock.release()
+            # Do this without lock
+            for peer, message in messages:
+                self.send_message(peer, message)
+            time.sleep(0.050)

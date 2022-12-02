@@ -10,7 +10,7 @@ class MemoryTestHarness:
 
     def __init__(self, num_nodes, quiet=False):
         self.nodes = {}
-        logging.basicConfig(format='%(asctime)s %(message)s', level=logging.DEBUG)
+        logging.basicConfig()
         self.logger = logging.getLogger('MemoryTestHarness')
         self.logger.setLevel(logging.DEBUG if not quiet else logging.WARNING)
         self.messagehub = MessageHub(logger=self.logger)

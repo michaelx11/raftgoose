@@ -36,7 +36,7 @@ class MessageHub:
                 return
         with self.peer_locks[peer]:
             self.logger.debug('Sending message from {} to {}: {}'.format(sender, peer, message))
-            self.peer_dict[peer].recv_message((sender, message))
+            self.peer_dict[peer].receive_message(sender, message)
 
     def partition(self, nodesA, nodesB):
         with self.lock:

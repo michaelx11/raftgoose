@@ -32,7 +32,7 @@ class TestBasicElection():
         ])
 
 if __name__ == '__main__':
-    for i in range(100):
+    for i in range(1):
         print('Running test {}'.format(i))
-        TestBasicElection().test_basic_election(quiet=True)
+        TestBasicElection().test_basic_election(quiet=False)
 
