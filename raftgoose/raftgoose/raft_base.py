@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 class RaftBase(ABC):
     '''A basic Raft implementation which accesses everything through expected methods for abstraction'''
 
-    def __init__(self, node_id, peers, db, timer=None, logger=None, timeout=0.15, heartbeat=0.02):
+    def __init__(self, node_id, peers, db, timer=None, logger=None, timeout=0.15, heartbeat=0.03):
         '''Initialize the RaftBase object
         
         Inject the timer to allow for easier testing
@@ -64,6 +64,7 @@ class RaftBase(ABC):
 
         # message inboxes (must be locked, tried queue.Queue but behavior was strange)
         self.inbox = deque()
+        self.outbox_flag = threading.Event()
         self.outbox = deque()
 
 
@@ -152,6 +153,17 @@ class RaftBase(ABC):
             self.inbox.append(message)
 
 
+    def queue_outbox(self, message):
+        '''Queue a message to be sent to a peer
+
+        MUST BE LOCKED
+
+        '''
+        self.logger.debug('Queuing message: {}'.format(message))
+        self.outbox.append(message)
+        self.outbox_flag.set()
+
+
     def _process_request_vote(self, peer, rpc):
         '''Process a request_vote RPC and schedule a reply (if necessary) in outbox
 
@@ -197,7 +209,7 @@ class RaftBase(ABC):
             self.reset_election_timeout()
 
         # Once it goes into the outbox it's as good as done from this node's perspective
-        self.outbox.append((peer, msg))
+        self.queue_outbox((peer, msg))
 
 
     def _process_request_vote_reply(self, peer, rpc):
@@ -246,7 +258,7 @@ class RaftBase(ABC):
                 'leader_commit': self.db.get_commit_index(),
             }
             for t_peer in self.peers:
-                self.outbox.append((t_peer, msg))
+                self.queue_outbox((t_peer, msg))
 
 
     def _process_append_entry(self, peer, rpc):
@@ -315,7 +327,7 @@ class RaftBase(ABC):
             'node_id': self.node_id,
             'original_rpc': rpc
         }
-        self.outbox.append((peer, msg))
+        self.queue_outbox((peer, msg))
 
 
     def _check_commit(self):
@@ -331,8 +343,8 @@ class RaftBase(ABC):
         match_index = self.db.get_match_indexes_bulk()
         match_index = sorted(match_index.values())
         if len(match_index) > 0:
-            # Compute majority
-            majority = match_index[len(match_index) // 2]
+            # Compute majority, -1 because if even (4 -> 2 - 1 = index 1) if odd (3 -> 1 - 1 = index 0)
+            majority = match_index[len(match_index) // 2 - 1]
             if majority > self.db.get_commit_index() and self.db.get_log()[majority]['term'] == self.db.get_term():
                 self.logger.info('Majority match index is {}'.format(majority))
                 # Set commit index to majority
@@ -384,7 +396,7 @@ class RaftBase(ABC):
                 'entries': curr_log[self.db.get_next_index(peer):],
                 'leader_commit': self.db.get_commit_index(),
             }
-            self.outbox.append((peer, msg))
+            self.queue_outbox((peer, msg))
 
 
     def start(self):
@@ -402,7 +414,9 @@ class RaftBase(ABC):
         '''Kill the internal loop'''
         with self.lock:
             self.running = False
+            self.outbox_flag.set()
         self.internal_loop_thread.join()
+        self.outbox_thread.join()
 
 
     def pub_is_leader(self):
@@ -490,7 +504,7 @@ class RaftBase(ABC):
         }
         # Already locked
         for peer in self.peers:
-            self.outbox.append((peer, message))
+            self.queue_outbox((peer, message))
 
     def _internal_loop(self):
         '''This is an internal maintenance loop, for election timeouts etc
@@ -552,11 +566,11 @@ class RaftBase(ABC):
                             'term': self.db.get_term(),
                             'leader_id': self.node_id,
                             'prev_log_index': next_index - 1,
-                            'prev_log_term': curr_log[next_index - 1]['term'] if next_index > 0 else 0,
+                            'prev_log_term': curr_log[next_index - 1]['term'] if next_index > 1 else 0,
                             'entries': curr_log[next_index:],
                             'leader_commit': self.db.get_commit_index(),
                         }
-                        self.outbox.append((peer, message))
+                        self.queue_outbox((peer, message))
 
             # Finally sleep until either next election timeout or next heartbeat if leader
             sleep_time = min(self.election_timeout - self.timer.time(), self.heartbeat) if not is_leader else self.heartbeat
@@ -568,6 +582,8 @@ class RaftBase(ABC):
         Separated into a different thread because for memory-based network send_message might be effectively blocking
         '''
         while True:
+            # Wait for outbox flag
+            self.outbox_flag.wait()
             if not self.running:
                 return
             messages = []
@@ -575,9 +591,10 @@ class RaftBase(ABC):
                 self.lock.acquire()
                 messages = self.outbox.copy()
                 self.outbox.clear()
+                # clear outbox flag
+                self.outbox_flag.clear()
             finally:
                 self.lock.release()
             # Do this without lock
             for peer, message in messages:
                 self.send_message(peer, message)
-            time.sleep(0.050)
